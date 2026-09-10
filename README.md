@@ -1,10 +1,22 @@
-# NWG Cora AI-Agent Demo Kit
+# NWG Demo Kit — full rebuild (payments demo + Cora AI-agent layer)
 
-Everything needed to rebuild the **AI-assistant layer of the NatWest payments
-demo from the ground up**: the Cora agent (Flask + Anthropic), its OpenTelemetry
-pipeline into Splunk **AI Agent Monitoring**, the SPA widgets, the ITSI
-"AI agents" service + glass table, the O11y dashboard, and the ThousandEyes
-synthetics. Harvested 2026-09-10 from the live environment.
+Everything needed to rebuild the **entire NatWest payments demo from bare
+AWS** — cluster, microservices, chaos controller, traffic generator, SPA,
+Splunk box — **plus the AI-assistant layer**: the Cora agent (Flask +
+Anthropic), its OpenTelemetry pipeline into Splunk **AI Agent Monitoring**,
+the SPA widgets, the ITSI "AI agents" service + glass tables, the O11y
+dashboard, and the ThousandEyes synthetics. Harvested 2026-09-10 from the
+live environment.
+
+**New here? Read `START-HERE-MARC.md` first** — it maps the whole repo and
+gives the from-scratch build order:
+
+| Piece | Where |
+|---|---|
+| Original demo (terraform + cloud-init, helm, services, chaos controller, traffic gen, SPA) | `base-demo/` (incl. all post-April working-tree changes) |
+| What changed since April (nodes, nginx/watchdog, ITSI, TE, …) | `DRIFT.md` + `infra/CLUSTER-SPEC.md` |
+| Live-state exports (ITSI estate, k8s manifests, Splunk-box config) | `itsi-export/`, `cluster-snapshot/`, `splunk-box/` |
+| **AI layer build (the rest of THIS file)** | `app/ k8s/ collector/ frontend/ splunk-o11y/ itsi/ thousandeyes/` |
 
 > Companion reading: `docs/Splunk-AI-Agent-Monitoring-Guide.docx` — the full
 > annotated walkthrough of the agent code and the AI-monitoring recipe.
@@ -91,5 +103,7 @@ documented in the caption (`md_trendnote`). See `itsi/RESKIN-NOTES.md`.
 then without the flag. Targets **must be https** (http → 301 → permanent test
 failure), and enable the Splunk O11y stream integration on each test.
 
-## What is NOT in this kit (harvest when the Splunk box is next powered on)
-See `HARVEST-TODO.md`.
+## What is NOT in this kit
+Only secrets: every token/key is supplied by you via `config/kit.env` (see
+the example file) — exports mark their slots with `<<REDACTED-TOKEN>>`.
+(`HARVEST-TODO.md` is fully discharged — kept for the record.)
