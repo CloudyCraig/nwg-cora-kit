@@ -1,0 +1,1092 @@
+[
+ {
+  "createdDate": "2026-08-12 11:37:12",
+  "modifiedDate": "2026-08-12 17:48:00",
+  "createdBy": "Craig Gorman (cgorman@cisco.com)",
+  "modifiedBy": "Usage Enforcer Bot (primoz+cleanup@thousandeyes.com)",
+  "testId": 9515685,
+  "testName": "LON NatWest Payments - API gateway recent",
+  "interval": 300,
+  "subinterval": -1,
+  "randomizedStartTime": 0,
+  "intervalBoost": 0,
+  "flagOverrideAgentProxy": 0,
+  "flagCollectProxyNetworkData": 0,
+  "url": "http://nwg.crgpov.com/api/recent?limit=3",
+  "protocol": "TCP",
+  "ipv6Policy": "USE_AGENT_POLICY",
+  "networkMeasurements": 1,
+  "mtuMeasurements": 0,
+  "bandwidthMeasurements": 0,
+  "bgpMeasurements": 0,
+  "usePublicBgp": 0,
+  "alertsEnabled": 0,
+  "liveShare": 0,
+  "httpTimeLimit": 8,
+  "httpTargetTime": 1000,
+  "httpVersion": 2,
+  "followRedirects": 1,
+  "requestMethod": "GET",
+  "sslVersionId": 0,
+  "verifyCertificate": 1,
+  "useNtlm": 0,
+  "allowUnsafeLegacyRenegotiation": 1,
+  "authType": "NONE",
+  "contentRegex": "\"items\"",
+  "desiredStatusCode": "200",
+  "flagDistributedTracing": false,
+  "probeMode": "AUTO",
+  "continuousMode": 0,
+  "pathTraceMode": "classic",
+  "vaultCredentials": [],
+  "oneTimeSchedules": [],
+  "description": "Independent backend probe that exercises the /api/recent read path on the api-gateway via the public proxy. Lets us tell apart 'page is up' from 'API is broken' when one alert fires without the other.",
+  "agents": [
+   {
+    "agentId": 1099706,
+    "agentName": "Amsterdam, Netherlands (Lumen)",
+    "agentType": "Cloud",
+    "countryId": "NL",
+    "targetOnly": 0,
+    "ipAddresses": [
+     "213.244.168.79",
+     "2001:4c08:2003:b0e::19:4"
+    ],
+    "location": "Amsterdam, Netherlands",
+    "network": "Lumen (Level 3) (AS 3356)",
+    "prefix": "213.244.128.0/18"
+   },
+   {
+    "agentId": 1117416,
+    "agentName": "London, England (Lumen)",
+    "agentType": "Cloud",
+    "countryId": "GB",
+    "targetOnly": 0,
+    "ipAddresses": [
+     "212.133.127.85",
+     "2001:4c08:2003:b11::31:a"
+    ],
+    "location": "London, England, UK",
+    "network": "Lumen (Level 3) (AS 3356)",
+    "prefix": "212.133.0.0/17"
+   },
+   {
+    "agentId": 1189726,
+    "agentName": "Frankfurt, Germany (Lumen)",
+    "agentType": "Cloud",
+    "countryId": "DE",
+    "targetOnly": 0,
+    "ipAddresses": [
+     "62.140.4.205",
+     "2001:4c08:2003:b14::31:2"
+    ],
+    "location": "Frankfurt am Main, Germany",
+    "network": "Lumen (Level 3) (AS 3356)",
+    "prefix": "62.140.0.0/19"
+   },
+   {
+    "agentId": 1304475,
+    "agentName": "Madrid, Spain (Vodafone)",
+    "agentType": "Cloud",
+    "countryId": "ES",
+    "targetOnly": 0,
+    "ipAddresses": [
+     "89.6.179.202",
+     "2a01:807:ffff:c800::11:9"
+    ],
+    "location": "Madrid, Spain",
+    "network": "VODAFONE ESPANA S.A.U. (AS 12430)",
+    "prefix": "89.6.0.0/15"
+   }
+  ],
+  "sharedWithAccounts": [
+   {
+    "aid": 2138186,
+    "name": "cgorman"
+   }
+  ],
+  "numPathTraces": 3,
+  "oAuth": {},
+  "apiLinks": [
+   {
+    "rel": "self",
+    "href": "https://api.thousandeyes.com/v6/tests/9515685"
+   },
+   {
+    "rel": "data",
+    "href": "https://api.thousandeyes.com/v6/web/http-server/9515685"
+   },
+   {
+    "rel": "data",
+    "href": "https://api.thousandeyes.com/v6/net/metrics/9515685"
+   },
+   {
+    "rel": "data",
+    "href": "https://api.thousandeyes.com/v6/net/path-vis/9515685"
+   }
+  ],
+  "enabled": 1,
+  "savedEvent": 0,
+  "sslVersion": "Auto"
+ },
+ {
+  "createdDate": "2026-08-12 11:37:16",
+  "modifiedDate": "2026-09-04 14:36:06",
+  "createdBy": "Craig Gorman (cgorman@cisco.com)",
+  "modifiedBy": "Craig Gorman (cgorman@cisco.com)",
+  "testId": 9515694,
+  "testName": "LON NatWest Payments - POST /api/process",
+  "interval": 300,
+  "subinterval": -1,
+  "randomizedStartTime": 0,
+  "intervalBoost": 0,
+  "flagOverrideAgentProxy": 0,
+  "flagCollectProxyNetworkData": 0,
+  "url": "https://nwg.crgpov.com/api/process",
+  "protocol": "TCP",
+  "ipv6Policy": "USE_AGENT_POLICY",
+  "networkMeasurements": 1,
+  "mtuMeasurements": 0,
+  "bandwidthMeasurements": 0,
+  "bgpMeasurements": 0,
+  "usePublicBgp": 0,
+  "alertsEnabled": 0,
+  "liveShare": 0,
+  "httpTimeLimit": 10,
+  "httpTargetTime": 1000,
+  "httpVersion": 2,
+  "followRedirects": 0,
+  "postBody": "{\"payment_id\":\"te-synth-8f98752424a941db\",\"scheme\":\"FPS\",\"amount_minor_units\":4200,\"currency\":\"GBP\",\"debtor_country\":\"GB\",\"creditor_country\":\"GB\",\"channel\":\"web\",\"customer_id\":\"thousandeyes-synthetic\",\"customer_tier\":\"silver\"}",
+  "requestMethod": "POST",
+  "sslVersionId": 0,
+  "verifyCertificate": 1,
+  "useNtlm": 0,
+  "allowUnsafeLegacyRenegotiation": 1,
+  "authType": "NONE",
+  "headers": [
+   "Content-Type: application/json"
+  ],
+  "customHeaders": {
+   "root": {
+    "Content-Type": "application/json"
+   }
+  },
+  "contentRegex": "\"status\"\\s*:\\s*\"(accepted|partial)\"",
+  "desiredStatusCode": "200",
+  "flagDistributedTracing": false,
+  "probeMode": "AUTO",
+  "continuousMode": 0,
+  "pathTraceMode": "classic",
+  "vaultCredentials": [],
+  "oneTimeSchedules": [],
+  "description": "Direct synthetic POST to the api-gateway. Exercises the same write path traffic-gen does, but from a known external location, so we can graph backend-write availability and tail latency separately from the browser-load story.",
+  "agents": [
+   {
+    "agentId": 1099706,
+    "agentName": "Amsterdam, Netherlands (Lumen)",
+    "agentType": "Cloud",
+    "countryId": "NL",
+    "targetOnly": 0,
+    "ipAddresses": [
+     "213.244.168.79",
+     "2001:4c08:2003:b0e::19:4"
+    ],
+    "location": "Amsterdam, Netherlands",
+    "network": "Lumen (Level 3) (AS 3356)",
+    "prefix": "213.244.128.0/18"
+   },
+   {
+    "agentId": 1117416,
+    "agentName": "London, England (Lumen)",
+    "agentType": "Cloud",
+    "countryId": "GB",
+    "targetOnly": 0,
+    "ipAddresses": [
+     "212.133.127.81",
+     "2001:4c08:2003:b11::31:6"
+    ],
+    "location": "London, England, UK",
+    "network": "Lumen (Level 3) (AS 3356)",
+    "prefix": "212.133.0.0/17"
+   },
+   {
+    "agentId": 1189726,
+    "agentName": "Frankfurt, Germany (Lumen)",
+    "agentType": "Cloud",
+    "countryId": "DE",
+    "targetOnly": 0,
+    "ipAddresses": [
+     "62.140.4.205",
+     "2001:4c08:2003:b14::31:2"
+    ],
+    "location": "Frankfurt am Main, Germany",
+    "network": "Lumen (Level 3) (AS 3356)",
+    "prefix": "62.140.0.0/19"
+   },
+   {
+    "agentId": 1304475,
+    "agentName": "Madrid, Spain (Vodafone)",
+    "agentType": "Cloud",
+    "countryId": "ES",
+    "targetOnly": 0,
+    "ipAddresses": [
+     "89.6.179.198",
+     "2a01:807:ffff:c800::11:5"
+    ],
+    "location": "Madrid, Spain",
+    "network": "VODAFONE ESPANA S.A.U. (AS 12430)",
+    "prefix": "89.6.0.0/15"
+   }
+  ],
+  "sharedWithAccounts": [
+   {
+    "aid": 2138186,
+    "name": "cgorman"
+   }
+  ],
+  "numPathTraces": 3,
+  "oAuth": {},
+  "apiLinks": [
+   {
+    "rel": "self",
+    "href": "https://api.thousandeyes.com/v6/tests/9515694"
+   },
+   {
+    "rel": "data",
+    "href": "https://api.thousandeyes.com/v6/web/http-server/9515694"
+   },
+   {
+    "rel": "data",
+    "href": "https://api.thousandeyes.com/v6/net/metrics/9515694"
+   },
+   {
+    "rel": "data",
+    "href": "https://api.thousandeyes.com/v6/net/path-vis/9515694"
+   }
+  ],
+  "enabled": 1,
+  "savedEvent": 0,
+  "sslVersion": "Auto"
+ },
+ {
+  "createdDate": "2026-08-12 12:00:58",
+  "createdBy": "Craig Gorman (cgorman@cisco.com)",
+  "testId": 9516241,
+  "testName": "LON NatWest Payments - POST /api/process (all locations)",
+  "interval": 300,
+  "subinterval": -1,
+  "randomizedStartTime": 0,
+  "intervalBoost": 0,
+  "flagOverrideAgentProxy": 0,
+  "flagCollectProxyNetworkData": 0,
+  "url": "https://nwg.crgpov.com/api/process",
+  "protocol": "TCP",
+  "ipv6Policy": "USE_AGENT_POLICY",
+  "networkMeasurements": 1,
+  "mtuMeasurements": 0,
+  "bandwidthMeasurements": 0,
+  "bgpMeasurements": 0,
+  "usePublicBgp": 0,
+  "alertsEnabled": 0,
+  "liveShare": 0,
+  "httpTimeLimit": 10,
+  "httpTargetTime": 1000,
+  "httpVersion": 2,
+  "followRedirects": 0,
+  "postBody": "{\"payment_id\":\"te-synth-8f98752424a941db\",\"scheme\":\"FPS\",\"amount_minor_units\":4200,\"currency\":\"GBP\",\"debtor_country\":\"GB\",\"creditor_country\":\"GB\",\"channel\":\"web\",\"customer_id\":\"thousandeyes-synthetic\",\"customer_tier\":\"silver\"}",
+  "requestMethod": "POST",
+  "sslVersionId": 0,
+  "verifyCertificate": 1,
+  "useNtlm": 0,
+  "allowUnsafeLegacyRenegotiation": 1,
+  "authType": "NONE",
+  "headers": [
+   "Content-Type: application/json"
+  ],
+  "customHeaders": {
+   "root": {
+    "Content-Type": "application/json"
+   }
+  },
+  "contentRegex": "\"status\"\\s*:\\s*\"(accepted|partial)\"",
+  "desiredStatusCode": "200",
+  "flagDistributedTracing": false,
+  "probeMode": "AUTO",
+  "continuousMode": 0,
+  "pathTraceMode": "inSession",
+  "vaultCredentials": [],
+  "oneTimeSchedules": [],
+  "description": "Direct synthetic POST to the api-gateway. Exercises the same write path traffic-gen does, but from a known external location, so we can graph backend-write availability and tail latency separately from the browser-load story.",
+  "agents": [
+   {
+    "agentId": 10,
+    "agentName": "Paris, France",
+    "agentType": "Cloud",
+    "countryId": "FR",
+    "targetOnly": 0,
+    "ipAddresses": [
+     "185.255.85.241",
+     "2a02:4ba:100:0:9::5"
+    ],
+    "location": "Paris, France",
+    "network": "Iguane Solutions SAS (AS 200271)",
+    "prefix": "185.255.84.0/22"
+   },
+   {
+    "agentId": 32,
+    "agentName": "London, England",
+    "agentType": "Cloud",
+    "countryId": "GB",
+    "targetOnly": 0,
+    "ipAddresses": [
+     "64.29.134.173",
+     "2607:f3a0:a006:30::21:17"
+    ],
+    "location": "London, England, UK",
+    "network": "UnitedLayer, LLC (AS 399814)",
+    "prefix": "64.29.134.0/24"
+   },
+   {
+    "agentId": 142,
+    "agentName": "Madrid, Spain",
+    "agentType": "Cloud",
+    "countryId": "ES",
+    "targetOnly": 0,
+    "ipAddresses": [
+     "23.90.190.80",
+     "2a0b:21c0:6002:5::9:5"
+    ],
+    "location": "Madrid, Spain",
+    "network": "Zenlayer Inc (AS 21859)",
+    "prefix": "23.90.188.0/22"
+   },
+   {
+    "agentId": 4413,
+    "agentName": "Milan, Italy",
+    "agentType": "Cloud",
+    "countryId": "IT",
+    "targetOnly": 0,
+    "ipAddresses": [
+     "104.166.169.89",
+     "2a0b:21c1:1001::3:4"
+    ],
+    "location": "Milan, Italy",
+    "network": "Zenlayer Inc (AS 21859)",
+    "prefix": "104.166.168.0/22"
+   },
+   {
+    "agentId": 315431,
+    "agentName": "Frankfurt, Germany",
+    "agentType": "Cloud",
+    "countryId": "DE",
+    "targetOnly": 0,
+    "ipAddresses": [
+     "64.29.138.143",
+     "2607:f3a0:a00a:30::20:11"
+    ],
+    "location": "Frankfurt am Main, Germany",
+    "network": "UnitedLayer, LLC (AS 399809)",
+    "prefix": "64.29.138.0/24"
+   }
+  ],
+  "sharedWithAccounts": [
+   {
+    "aid": 2138186,
+    "name": "cgorman"
+   }
+  ],
+  "numPathTraces": 3,
+  "oAuth": {},
+  "apiLinks": [
+   {
+    "rel": "self",
+    "href": "https://api.thousandeyes.com/v6/tests/9516241"
+   },
+   {
+    "rel": "data",
+    "href": "https://api.thousandeyes.com/v6/web/http-server/9516241"
+   },
+   {
+    "rel": "data",
+    "href": "https://api.thousandeyes.com/v6/net/metrics/9516241"
+   },
+   {
+    "rel": "data",
+    "href": "https://api.thousandeyes.com/v6/net/path-vis/9516241"
+   }
+  ],
+  "enabled": 1,
+  "savedEvent": 0,
+  "sslVersion": "Auto"
+ },
+ {
+  "createdDate": "2026-08-12 11:37:35",
+  "modifiedDate": "2026-08-12 17:48:17",
+  "createdBy": "Craig Gorman (cgorman@cisco.com)",
+  "modifiedBy": "Usage Enforcer Bot (primoz+cleanup@thousandeyes.com)",
+  "testId": 9515768,
+  "testName": "LON NatWest Payments - SPA login page",
+  "interval": 300,
+  "subinterval": -1,
+  "randomizedStartTime": 0,
+  "intervalBoost": 0,
+  "flagOverrideAgentProxy": 0,
+  "flagCollectProxyNetworkData": 0,
+  "url": "http://nwg.crgpov.com/",
+  "protocol": "TCP",
+  "ipv6Policy": "USE_AGENT_POLICY",
+  "networkMeasurements": 1,
+  "mtuMeasurements": 1,
+  "bandwidthMeasurements": 0,
+  "bgpMeasurements": 0,
+  "usePublicBgp": 0,
+  "alertsEnabled": 0,
+  "liveShare": 0,
+  "httpTimeLimit": 5,
+  "httpTargetTime": 1000,
+  "httpVersion": 2,
+  "followRedirects": 1,
+  "requestMethod": "GET",
+  "sslVersionId": 0,
+  "verifyCertificate": 1,
+  "useNtlm": 0,
+  "allowUnsafeLegacyRenegotiation": 1,
+  "authType": "NONE",
+  "contentRegex": "",
+  "flagDistributedTracing": false,
+  "probeMode": "AUTO",
+  "continuousMode": 0,
+  "pathTraceMode": "classic",
+  "vaultCredentials": [],
+  "oneTimeSchedules": [],
+  "description": "Synthetic check that the customer-facing SPA login page is reachable and returns 200 < 3s. The cheapest, highest-frequency probe in the suite - the canary for 'is the bank reachable from anywhere on earth'.",
+  "agents": [
+   {
+    "agentId": 3,
+    "agentName": "Singapore",
+    "agentType": "Cloud",
+    "countryId": "SG",
+    "targetOnly": 0,
+    "ipAddresses": [
+     "64.29.136.229",
+     "2607:f3a0:a008:30::34:1"
+    ],
+    "location": "Central Singapore, Singapore",
+    "network": "UnitedLayer, LLC (AS 399812)",
+    "prefix": "64.29.136.0/24"
+   },
+   {
+    "agentId": 108960,
+    "agentName": "New York, NY (CenturyLink)",
+    "agentType": "Cloud",
+    "countryId": "US",
+    "targetOnly": 0,
+    "ipAddresses": [
+     "4.36.24.17",
+     "2001:1900:2100:2836::28:8"
+    ],
+    "location": "New York, New York, US",
+    "network": "Lumen (Level 3) (AS 3356)",
+    "prefix": "4.0.0.0/9"
+   },
+   {
+    "agentId": 1099706,
+    "agentName": "Amsterdam, Netherlands (Lumen)",
+    "agentType": "Cloud",
+    "countryId": "NL",
+    "targetOnly": 0,
+    "ipAddresses": [
+     "213.244.168.80",
+     "2001:4c08:2003:b0e::19:5"
+    ],
+    "location": "Amsterdam, Netherlands",
+    "network": "Lumen (Level 3) (AS 3356)",
+    "prefix": "213.244.128.0/18"
+   },
+   {
+    "agentId": 1117416,
+    "agentName": "London, England (Lumen)",
+    "agentType": "Cloud",
+    "countryId": "GB",
+    "targetOnly": 0,
+    "ipAddresses": [
+     "212.133.127.81",
+     "2001:4c08:2003:b11::31:6"
+    ],
+    "location": "London, England, UK",
+    "network": "Lumen (Level 3) (AS 3356)",
+    "prefix": "212.133.0.0/17"
+   },
+   {
+    "agentId": 1189726,
+    "agentName": "Frankfurt, Germany (Lumen)",
+    "agentType": "Cloud",
+    "countryId": "DE",
+    "targetOnly": 0,
+    "ipAddresses": [
+     "62.140.4.214",
+     "2001:4c08:2003:b14::31:b"
+    ],
+    "location": "Frankfurt am Main, Germany",
+    "network": "Lumen (Level 3) (AS 3356)",
+    "prefix": "62.140.0.0/19"
+   },
+   {
+    "agentId": 1304475,
+    "agentName": "Madrid, Spain (Vodafone)",
+    "agentType": "Cloud",
+    "countryId": "ES",
+    "targetOnly": 0,
+    "ipAddresses": [
+     "89.6.179.200",
+     "2a01:807:ffff:c800::11:7"
+    ],
+    "location": "Madrid, Spain",
+    "network": "VODAFONE ESPANA S.A.U. (AS 12430)",
+    "prefix": "89.6.0.0/15"
+   }
+  ],
+  "sharedWithAccounts": [
+   {
+    "aid": 2138186,
+    "name": "cgorman"
+   }
+  ],
+  "numPathTraces": 3,
+  "oAuth": {},
+  "apiLinks": [
+   {
+    "rel": "self",
+    "href": "https://api.thousandeyes.com/v6/tests/9515768"
+   },
+   {
+    "rel": "data",
+    "href": "https://api.thousandeyes.com/v6/web/http-server/9515768"
+   },
+   {
+    "rel": "data",
+    "href": "https://api.thousandeyes.com/v6/net/metrics/9515768"
+   },
+   {
+    "rel": "data",
+    "href": "https://api.thousandeyes.com/v6/net/path-vis/9515768"
+   }
+  ],
+  "enabled": 1,
+  "savedEvent": 0,
+  "sslVersion": "Auto"
+ },
+ {
+  "createdDate": "2026-08-12 11:37:19",
+  "modifiedDate": "2026-09-04 14:36:07",
+  "createdBy": "Craig Gorman (cgorman@cisco.com)",
+  "modifiedBy": "Craig Gorman (cgorman@cisco.com)",
+  "testId": 9515702,
+  "testName": "NatWest Payments - POST /api/process (Frankfurt synthetic)",
+  "interval": 300,
+  "subinterval": -1,
+  "randomizedStartTime": 0,
+  "intervalBoost": 0,
+  "flagOverrideAgentProxy": 0,
+  "flagCollectProxyNetworkData": 0,
+  "url": "https://nwg.crgpov.com/api/process",
+  "protocol": "TCP",
+  "ipv6Policy": "USE_AGENT_POLICY",
+  "networkMeasurements": 1,
+  "mtuMeasurements": 0,
+  "bandwidthMeasurements": 0,
+  "bgpMeasurements": 0,
+  "usePublicBgp": 0,
+  "alertsEnabled": 0,
+  "liveShare": 0,
+  "httpTimeLimit": 10,
+  "httpTargetTime": 1000,
+  "httpVersion": 2,
+  "followRedirects": 0,
+  "postBody": "{\"payment_id\": \"te-loc-frankfurt-bcc980633f76\", \"scheme\": \"FPS\", \"amount_minor_units\": 12500, \"currency\": \"GBP\", \"debtor_country\": \"GB\", \"creditor_country\": \"GB\", \"channel\": \"web\", \"customer_id\": \"thousandeyes-frankfurt-synthetic\", \"customer_tier\": \"standard\", \"customer_location\": \"frankfurt\", \"customer_country\": \"DE\"}",
+  "requestMethod": "POST",
+  "sslVersionId": 0,
+  "verifyCertificate": 1,
+  "useNtlm": 0,
+  "allowUnsafeLegacyRenegotiation": 1,
+  "authType": "NONE",
+  "headers": [
+   "Content-Type: application/json"
+  ],
+  "customHeaders": {
+   "root": {
+    "Content-Type": "application/json"
+   }
+  },
+  "contentRegex": "\"status\"\\s*:\\s*\"(accepted|partial)\"",
+  "desiredStatusCode": "200",
+  "flagDistributedTracing": false,
+  "probeMode": "AUTO",
+  "continuousMode": 0,
+  "pathTraceMode": "classic",
+  "vaultCredentials": [],
+  "oneTimeSchedules": [],
+  "description": "Synthetic POST of a DE/frankfurt payment to the api-gateway, probed from the Frankfurt TE cloud agent. Feeds the Frankfurt synthetic ITSI KPI in Payments by Location. Baseline-green; escalates under global db-bad-query / db-outage chaos. Added by cgorman.",
+  "agents": [
+   {
+    "agentId": 315431,
+    "agentName": "Frankfurt, Germany",
+    "agentType": "Cloud",
+    "countryId": "DE",
+    "targetOnly": 0,
+    "ipAddresses": [
+     "64.29.138.233",
+     "2607:f3a0:a00a:30::24:5"
+    ],
+    "location": "Frankfurt am Main, Germany",
+    "network": "UnitedLayer, LLC (AS 399809)",
+    "prefix": "64.29.138.0/24"
+   }
+  ],
+  "sharedWithAccounts": [
+   {
+    "aid": 2138186,
+    "name": "cgorman"
+   }
+  ],
+  "numPathTraces": 3,
+  "oAuth": {},
+  "apiLinks": [
+   {
+    "rel": "self",
+    "href": "https://api.thousandeyes.com/v6/tests/9515702"
+   },
+   {
+    "rel": "data",
+    "href": "https://api.thousandeyes.com/v6/web/http-server/9515702"
+   },
+   {
+    "rel": "data",
+    "href": "https://api.thousandeyes.com/v6/net/metrics/9515702"
+   },
+   {
+    "rel": "data",
+    "href": "https://api.thousandeyes.com/v6/net/path-vis/9515702"
+   }
+  ],
+  "enabled": 1,
+  "savedEvent": 0,
+  "sslVersion": "Auto"
+ },
+ {
+  "createdDate": "2026-08-12 11:37:22",
+  "modifiedDate": "2026-09-04 14:36:09",
+  "createdBy": "Craig Gorman (cgorman@cisco.com)",
+  "modifiedBy": "Craig Gorman (cgorman@cisco.com)",
+  "testId": 9515721,
+  "testName": "NatWest Payments - POST /api/process (London synthetic)",
+  "interval": 300,
+  "subinterval": -1,
+  "randomizedStartTime": 0,
+  "intervalBoost": 0,
+  "flagOverrideAgentProxy": 0,
+  "flagCollectProxyNetworkData": 0,
+  "url": "https://nwg.crgpov.com/api/process",
+  "protocol": "TCP",
+  "ipv6Policy": "USE_AGENT_POLICY",
+  "networkMeasurements": 1,
+  "mtuMeasurements": 0,
+  "bandwidthMeasurements": 0,
+  "bgpMeasurements": 0,
+  "usePublicBgp": 0,
+  "alertsEnabled": 0,
+  "liveShare": 0,
+  "httpTimeLimit": 10,
+  "httpTargetTime": 1000,
+  "httpVersion": 2,
+  "followRedirects": 0,
+  "postBody": "{\"payment_id\": \"te-loc-london-910c1f36dfea\", \"scheme\": \"FPS\", \"amount_minor_units\": 12500, \"currency\": \"GBP\", \"debtor_country\": \"GB\", \"creditor_country\": \"GB\", \"channel\": \"web\", \"customer_id\": \"thousandeyes-london-synthetic\", \"customer_tier\": \"standard\", \"customer_location\": \"london\", \"customer_country\": \"GB\"}",
+  "requestMethod": "POST",
+  "sslVersionId": 0,
+  "verifyCertificate": 1,
+  "useNtlm": 0,
+  "allowUnsafeLegacyRenegotiation": 1,
+  "authType": "NONE",
+  "headers": [
+   "Content-Type: application/json"
+  ],
+  "customHeaders": {
+   "root": {
+    "Content-Type": "application/json"
+   }
+  },
+  "contentRegex": "\"status\"\\s*:\\s*\"(accepted|partial)\"",
+  "desiredStatusCode": "200",
+  "flagDistributedTracing": false,
+  "probeMode": "AUTO",
+  "continuousMode": 0,
+  "pathTraceMode": "classic",
+  "vaultCredentials": [],
+  "oneTimeSchedules": [],
+  "description": "Synthetic POST of a GB/london payment to the api-gateway, probed from the London TE cloud agent. Feeds the London synthetic ITSI KPI in Payments by Location. Baseline-green; escalates under global db-bad-query / db-outage chaos. Added by cgorman.",
+  "agents": [
+   {
+    "agentId": 32,
+    "agentName": "London, England",
+    "agentType": "Cloud",
+    "countryId": "GB",
+    "targetOnly": 0,
+    "ipAddresses": [
+     "64.29.134.174",
+     "2607:f3a0:a006:30::21:18"
+    ],
+    "location": "London, England, UK",
+    "network": "UnitedLayer, LLC (AS 399814)",
+    "prefix": "64.29.134.0/24"
+   }
+  ],
+  "sharedWithAccounts": [
+   {
+    "aid": 2138186,
+    "name": "cgorman"
+   }
+  ],
+  "numPathTraces": 3,
+  "oAuth": {},
+  "apiLinks": [
+   {
+    "rel": "self",
+    "href": "https://api.thousandeyes.com/v6/tests/9515721"
+   },
+   {
+    "rel": "data",
+    "href": "https://api.thousandeyes.com/v6/web/http-server/9515721"
+   },
+   {
+    "rel": "data",
+    "href": "https://api.thousandeyes.com/v6/net/metrics/9515721"
+   },
+   {
+    "rel": "data",
+    "href": "https://api.thousandeyes.com/v6/net/path-vis/9515721"
+   }
+  ],
+  "enabled": 1,
+  "savedEvent": 0,
+  "sslVersion": "Auto"
+ },
+ {
+  "createdDate": "2026-08-12 11:37:26",
+  "modifiedDate": "2026-09-04 14:36:10",
+  "createdBy": "Craig Gorman (cgorman@cisco.com)",
+  "modifiedBy": "Craig Gorman (cgorman@cisco.com)",
+  "testId": 9515728,
+  "testName": "NatWest Payments - POST /api/process (Madrid AML synthetic)",
+  "interval": 300,
+  "subinterval": -1,
+  "randomizedStartTime": 0,
+  "intervalBoost": 0,
+  "flagOverrideAgentProxy": 0,
+  "flagCollectProxyNetworkData": 0,
+  "url": "https://nwg.crgpov.com/api/process",
+  "protocol": "TCP",
+  "ipv6Policy": "USE_AGENT_POLICY",
+  "networkMeasurements": 1,
+  "mtuMeasurements": 0,
+  "bandwidthMeasurements": 0,
+  "bgpMeasurements": 0,
+  "usePublicBgp": 0,
+  "alertsEnabled": 0,
+  "liveShare": 0,
+  "httpTimeLimit": 10,
+  "httpTargetTime": 1000,
+  "httpVersion": 2,
+  "followRedirects": 0,
+  "postBody": "{\"payment_id\": \"te-aml-madrid-801ad3133f52\", \"scheme\": \"FPS\", \"amount_minor_units\": 12500, \"currency\": \"GBP\", \"debtor_country\": \"GB\", \"creditor_country\": \"GB\", \"channel\": \"web\", \"customer_id\": \"thousandeyes-aml-synthetic\", \"customer_tier\": \"standard\", \"customer_location\": \"madrid\", \"customer_country\": \"ES\"}",
+  "requestMethod": "POST",
+  "sslVersionId": 0,
+  "verifyCertificate": 1,
+  "useNtlm": 0,
+  "allowUnsafeLegacyRenegotiation": 1,
+  "authType": "NONE",
+  "headers": [
+   "Content-Type: application/json"
+  ],
+  "customHeaders": {
+   "root": {
+    "Content-Type": "application/json"
+   }
+  },
+  "contentRegex": "\"status\"\\s*:\\s*\"(accepted|partial)\"",
+  "desiredStatusCode": "200",
+  "flagDistributedTracing": false,
+  "probeMode": "AUTO",
+  "continuousMode": 0,
+  "pathTraceMode": "classic",
+  "vaultCredentials": [],
+  "oneTimeSchedules": [],
+  "description": "Synthetic POST of an ES/Madrid payment to the api-gateway, exercising the sanctions-aml-service path. Degrades (real ~2s latency + RegionalDependencyError 5xx) under the 'madrid-payment-degradation' chaos. Feeds the AML synthetic ITSI KPI. Added during engagement handover (cgorman).",
+  "agents": [
+   {
+    "agentId": 32,
+    "agentName": "London, England",
+    "agentType": "Cloud",
+    "countryId": "GB",
+    "targetOnly": 0,
+    "ipAddresses": [
+     "64.29.134.247",
+     "2607:f3a0:a006:30::24:19"
+    ],
+    "location": "London, England, UK",
+    "network": "UnitedLayer, LLC (AS 399814)",
+    "prefix": "64.29.134.0/24"
+   },
+   {
+    "agentId": 142,
+    "agentName": "Madrid, Spain",
+    "agentType": "Cloud",
+    "countryId": "ES",
+    "targetOnly": 0,
+    "ipAddresses": [
+     "23.90.190.80",
+     "2a0b:21c0:6002:5::9:5"
+    ],
+    "location": "Madrid, Spain",
+    "network": "Zenlayer Inc (AS 21859)",
+    "prefix": "23.90.188.0/22"
+   },
+   {
+    "agentId": 315431,
+    "agentName": "Frankfurt, Germany",
+    "agentType": "Cloud",
+    "countryId": "DE",
+    "targetOnly": 0,
+    "ipAddresses": [
+     "64.29.138.232",
+     "2607:f3a0:a00a:30::24:4"
+    ],
+    "location": "Frankfurt am Main, Germany",
+    "network": "UnitedLayer, LLC (AS 399809)",
+    "prefix": "64.29.138.0/24"
+   }
+  ],
+  "sharedWithAccounts": [
+   {
+    "aid": 2138186,
+    "name": "cgorman"
+   }
+  ],
+  "numPathTraces": 3,
+  "oAuth": {},
+  "apiLinks": [
+   {
+    "rel": "self",
+    "href": "https://api.thousandeyes.com/v6/tests/9515728"
+   },
+   {
+    "rel": "data",
+    "href": "https://api.thousandeyes.com/v6/web/http-server/9515728"
+   },
+   {
+    "rel": "data",
+    "href": "https://api.thousandeyes.com/v6/net/metrics/9515728"
+   },
+   {
+    "rel": "data",
+    "href": "https://api.thousandeyes.com/v6/net/path-vis/9515728"
+   }
+  ],
+  "enabled": 1,
+  "savedEvent": 0,
+  "sslVersion": "Auto"
+ },
+ {
+  "createdDate": "2026-08-12 11:37:29",
+  "modifiedDate": "2026-09-04 14:36:12",
+  "createdBy": "Craig Gorman (cgorman@cisco.com)",
+  "modifiedBy": "Craig Gorman (cgorman@cisco.com)",
+  "testId": 9515741,
+  "testName": "NatWest Payments - POST /api/process (Milan synthetic)",
+  "interval": 300,
+  "subinterval": -1,
+  "randomizedStartTime": 0,
+  "intervalBoost": 0,
+  "flagOverrideAgentProxy": 0,
+  "flagCollectProxyNetworkData": 0,
+  "url": "https://nwg.crgpov.com/api/process",
+  "protocol": "TCP",
+  "ipv6Policy": "USE_AGENT_POLICY",
+  "networkMeasurements": 1,
+  "mtuMeasurements": 0,
+  "bandwidthMeasurements": 0,
+  "bgpMeasurements": 0,
+  "usePublicBgp": 0,
+  "alertsEnabled": 0,
+  "liveShare": 0,
+  "httpTimeLimit": 10,
+  "httpTargetTime": 1000,
+  "httpVersion": 2,
+  "followRedirects": 0,
+  "postBody": "{\"payment_id\": \"te-loc-milan-544c5a4f4684\", \"scheme\": \"FPS\", \"amount_minor_units\": 12500, \"currency\": \"GBP\", \"debtor_country\": \"GB\", \"creditor_country\": \"GB\", \"channel\": \"web\", \"customer_id\": \"thousandeyes-milan-synthetic\", \"customer_tier\": \"standard\", \"customer_location\": \"milan\", \"customer_country\": \"IT\"}",
+  "requestMethod": "POST",
+  "sslVersionId": 0,
+  "verifyCertificate": 1,
+  "useNtlm": 0,
+  "allowUnsafeLegacyRenegotiation": 1,
+  "authType": "NONE",
+  "headers": [
+   "Content-Type: application/json"
+  ],
+  "customHeaders": {
+   "root": {
+    "Content-Type": "application/json"
+   }
+  },
+  "contentRegex": "\"status\"\\s*:\\s*\"(accepted|partial)\"",
+  "desiredStatusCode": "200",
+  "flagDistributedTracing": false,
+  "probeMode": "AUTO",
+  "continuousMode": 0,
+  "pathTraceMode": "classic",
+  "vaultCredentials": [],
+  "oneTimeSchedules": [],
+  "description": "Synthetic POST of a IT/milan payment to the api-gateway, probed from the Milan TE cloud agent. Feeds the Milan synthetic ITSI KPI in Payments by Location. Baseline-green; escalates under global db-bad-query / db-outage chaos. Added by cgorman.",
+  "agents": [
+   {
+    "agentId": 4413,
+    "agentName": "Milan, Italy",
+    "agentType": "Cloud",
+    "countryId": "IT",
+    "targetOnly": 0,
+    "ipAddresses": [
+     "104.166.169.79",
+     "2a0b:21c1:1001::2:4"
+    ],
+    "location": "Milan, Italy",
+    "network": "Zenlayer Inc (AS 21859)",
+    "prefix": "104.166.168.0/22"
+   }
+  ],
+  "sharedWithAccounts": [
+   {
+    "aid": 2138186,
+    "name": "cgorman"
+   }
+  ],
+  "numPathTraces": 3,
+  "oAuth": {},
+  "apiLinks": [
+   {
+    "rel": "self",
+    "href": "https://api.thousandeyes.com/v6/tests/9515741"
+   },
+   {
+    "rel": "data",
+    "href": "https://api.thousandeyes.com/v6/web/http-server/9515741"
+   },
+   {
+    "rel": "data",
+    "href": "https://api.thousandeyes.com/v6/net/metrics/9515741"
+   },
+   {
+    "rel": "data",
+    "href": "https://api.thousandeyes.com/v6/net/path-vis/9515741"
+   }
+  ],
+  "enabled": 1,
+  "savedEvent": 0,
+  "sslVersion": "Auto"
+ },
+ {
+  "createdDate": "2026-08-12 11:37:32",
+  "modifiedDate": "2026-09-04 14:36:13",
+  "createdBy": "Craig Gorman (cgorman@cisco.com)",
+  "modifiedBy": "Craig Gorman (cgorman@cisco.com)",
+  "testId": 9515755,
+  "testName": "NatWest Payments - POST /api/process (Paris synthetic)",
+  "interval": 300,
+  "subinterval": -1,
+  "randomizedStartTime": 0,
+  "intervalBoost": 0,
+  "flagOverrideAgentProxy": 0,
+  "flagCollectProxyNetworkData": 0,
+  "url": "https://nwg.crgpov.com/api/process",
+  "protocol": "TCP",
+  "ipv6Policy": "USE_AGENT_POLICY",
+  "networkMeasurements": 1,
+  "mtuMeasurements": 0,
+  "bandwidthMeasurements": 0,
+  "bgpMeasurements": 0,
+  "usePublicBgp": 0,
+  "alertsEnabled": 0,
+  "liveShare": 0,
+  "httpTimeLimit": 10,
+  "httpTargetTime": 1000,
+  "httpVersion": 2,
+  "followRedirects": 0,
+  "postBody": "{\"payment_id\": \"te-loc-paris-64abb70cc609\", \"scheme\": \"FPS\", \"amount_minor_units\": 12500, \"currency\": \"GBP\", \"debtor_country\": \"GB\", \"creditor_country\": \"GB\", \"channel\": \"web\", \"customer_id\": \"thousandeyes-paris-synthetic\", \"customer_tier\": \"standard\", \"customer_location\": \"paris\", \"customer_country\": \"FR\"}",
+  "requestMethod": "POST",
+  "sslVersionId": 0,
+  "verifyCertificate": 1,
+  "useNtlm": 0,
+  "allowUnsafeLegacyRenegotiation": 1,
+  "authType": "NONE",
+  "headers": [
+   "Content-Type: application/json"
+  ],
+  "customHeaders": {
+   "root": {
+    "Content-Type": "application/json"
+   }
+  },
+  "contentRegex": "\"status\"\\s*:\\s*\"(accepted|partial)\"",
+  "desiredStatusCode": "200",
+  "flagDistributedTracing": false,
+  "probeMode": "AUTO",
+  "continuousMode": 0,
+  "pathTraceMode": "classic",
+  "vaultCredentials": [],
+  "oneTimeSchedules": [],
+  "description": "Synthetic POST of a FR/paris payment to the api-gateway, probed from the Paris TE cloud agent. Feeds the Paris synthetic ITSI KPI in Payments by Location. Baseline-green; escalates under global db-bad-query / db-outage chaos. Added by cgorman.",
+  "agents": [
+   {
+    "agentId": 10,
+    "agentName": "Paris, France",
+    "agentType": "Cloud",
+    "countryId": "FR",
+    "targetOnly": 0,
+    "ipAddresses": [
+     "185.255.85.243",
+     "2a02:4ba:100:0:9::7"
+    ],
+    "location": "Paris, France",
+    "network": "Iguane Solutions SAS (AS 200271)",
+    "prefix": "185.255.84.0/22"
+   }
+  ],
+  "sharedWithAccounts": [
+   {
+    "aid": 2138186,
+    "name": "cgorman"
+   }
+  ],
+  "numPathTraces": 3,
+  "oAuth": {},
+  "apiLinks": [
+   {
+    "rel": "self",
+    "href": "https://api.thousandeyes.com/v6/tests/9515755"
+   },
+   {
+    "rel": "data",
+    "href": "https://api.thousandeyes.com/v6/web/http-server/9515755"
+   },
+   {
+    "rel": "data",
+    "href": "https://api.thousandeyes.com/v6/net/metrics/9515755"
+   },
+   {
+    "rel": "data",
+    "href": "https://api.thousandeyes.com/v6/net/path-vis/9515755"
+   }
+  ],
+  "enabled": 1,
+  "savedEvent": 0,
+  "sslVersion": "Auto"
+ }
+]

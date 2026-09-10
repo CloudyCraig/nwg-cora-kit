@@ -1,0 +1,130 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: cora-agent
+    part-of: cora-demo
+  name: cora-agent
+  namespace: natwest
+spec:
+  progressDeadlineSeconds: 600
+  replicas: 1
+  revisionHistoryLimit: 10
+  selector:
+    matchLabels:
+      app: cora-agent
+  strategy:
+    rollingUpdate:
+      maxSurge: 25%
+      maxUnavailable: 25%
+    type: RollingUpdate
+  template:
+    metadata:
+      annotations:
+        kubectl.kubernetes.io/restartedAt: '2026-09-03T15:51:22+01:00'
+        splunk.com/index: nwpay_audit
+        splunk.com/sourcetype: nwpay:cora
+      labels:
+        app: cora-agent
+        part-of: cora-demo
+    spec:
+      containers:
+      - command:
+        - sh
+        - /app/entrypoint.sh
+        env:
+        - name: NODE_IP
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: status.hostIP
+        - name: OTEL_SERVICE_NAME
+          value: cora-agent
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          value: http://cora-otelcol:4317
+        - name: OTEL_EXPORTER_OTLP_PROTOCOL
+          value: grpc
+        - name: OTEL_RESOURCE_ATTRIBUTES
+          value: deployment.environment=demo,service.namespace=natwest-payments,service.tier=ai-agent,k8s.cluster.name=natwest-payments-demo
+        - name: OTEL_PROPAGATORS
+          value: tracecontext,baggage
+        - name: OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT
+          value: 'true'
+        - name: CORA_MODEL
+          value: claude-haiku-4-5
+        - name: CORA_MAX_TOKENS
+          value: '512'
+        - name: CORA_SECONDARY_OTLP_ENDPOINT
+          value: cora-otelcol:4317
+        - name: OTEL_EXPORTER_OTLP_TRACES_INSECURE
+          value: 'true'
+        - name: ANTHROPIC_API_KEY
+          valueFrom:
+            secretKeyRef:
+              key: ANTHROPIC_API_KEY
+              name: cora-anthropic
+        - name: OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE
+          value: delta
+        - name: SPLUNK_HEC_ENDPOINT
+          valueFrom:
+            secretKeyRef:
+              key: SPLUNK_HEC_ENDPOINT
+              name: chaos-controller-token
+        - name: SPLUNK_HEC_TOKEN
+          valueFrom:
+            secretKeyRef:
+              key: SPLUNK_HEC_TOKEN
+              name: chaos-controller-token
+        - name: SPLUNK_HEC_INDEX
+          valueFrom:
+            secretKeyRef:
+              key: SPLUNK_HEC_INDEX
+              name: chaos-controller-token
+        image: python:3.12-slim
+        imagePullPolicy: IfNotPresent
+        livenessProbe:
+          failureThreshold: 6
+          httpGet:
+            path: /health
+            port: 8080
+            scheme: HTTP
+          initialDelaySeconds: 120
+          periodSeconds: 20
+          successThreshold: 1
+          timeoutSeconds: 1
+        name: cora
+        ports:
+        - containerPort: 8080
+          protocol: TCP
+        readinessProbe:
+          failureThreshold: 18
+          httpGet:
+            path: /readyz
+            port: 8080
+            scheme: HTTP
+          initialDelaySeconds: 40
+          periodSeconds: 10
+          successThreshold: 1
+          timeoutSeconds: 1
+        resources:
+          limits:
+            cpu: 500m
+            memory: 512Mi
+          requests:
+            cpu: 50m
+            memory: 128Mi
+        terminationMessagePath: /dev/termination-log
+        terminationMessagePolicy: File
+        volumeMounts:
+        - mountPath: /app
+          name: code
+      dnsPolicy: ClusterFirst
+      restartPolicy: Always
+      schedulerName: default-scheduler
+      securityContext: {}
+      terminationGracePeriodSeconds: 30
+      volumes:
+      - configMap:
+          defaultMode: 420
+          name: cora-agent-code
+        name: code

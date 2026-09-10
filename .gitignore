@@ -1,0 +1,6 @@
+config/kit.env
+*.env
+!config/kit.env.example
+.venv/
+node_modules/
+.DS_Store

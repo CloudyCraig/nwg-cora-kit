@@ -1,0 +1,82 @@
+{
+ "authorizedWriters": {
+  "teams": [],
+  "users": []
+ },
+ "chartDensity": "DEFAULT",
+ "charts": [
+  {
+   "chartId": "HRIXmq6CsAA",
+   "column": 0,
+   "height": 2,
+   "row": 1,
+   "width": 6
+  },
+  {
+   "chartId": "HRIXsumCwAA",
+   "column": 6,
+   "height": 2,
+   "row": 1,
+   "width": 6
+  },
+  {
+   "chartId": "HRIXZxGCwAA",
+   "column": 0,
+   "height": 2,
+   "row": 2,
+   "width": 6
+  },
+  {
+   "chartId": "HRIWly1CoAA",
+   "column": 6,
+   "height": 2,
+   "row": 2,
+   "width": 6
+  },
+  {
+   "chartId": "HRMo4RvCwAA",
+   "column": 0,
+   "height": 1,
+   "row": 0,
+   "width": 4
+  },
+  {
+   "chartId": "HRMoSj_CoAA",
+   "column": 4,
+   "height": 1,
+   "row": 0,
+   "width": 4
+  },
+  {
+   "chartId": "HRMo6rQCoAA",
+   "column": 8,
+   "height": 1,
+   "row": 0,
+   "width": 4
+  }
+ ],
+ "created": 1788271945419,
+ "creator": "HPgWSIsCoAA",
+ "customProperties": null,
+ "description": "",
+ "discoveryOptions": null,
+ "eventOverlays": null,
+ "filters": {
+  "sources": [],
+  "time": null,
+  "variables": []
+ },
+ "groupId": "HRIXuAWCoAA",
+ "groupName": "Cora AI Monitoring",
+ "id": "HRIZzAlCwAA",
+ "lastUpdated": 1788341665743,
+ "lastUpdatedBy": "HPgWSIsCoAA",
+ "maxDelayOverride": null,
+ "name": "Cora AI cost & usage",
+ "permissions": {
+  "acl": null,
+  "parent": "HRIXuAWCoAA"
+ },
+ "selectedEventOverlays": null,
+ "tags": []
+}
