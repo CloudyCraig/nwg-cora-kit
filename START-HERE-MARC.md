@@ -1,43 +1,49 @@
 # Hi Marc 👋
 
-This repo is everything from the **AI-assistant layer** I added on top of your
-payments demo, packaged so you can rebuild it from the ground up and make it
-your own. Your original demo (payments services, chaos controller, traffic
-generator, SPA) stays yours — this sits alongside it.
+This repo now contains **everything needed to rebuild the whole NWG demo from
+bare AWS** — cluster, payments microservices, chaos controller, traffic
+generator, SPA, Splunk box — plus the **AI-assistant layer** Craig added on
+top (agent, AI Agent Monitoring pipeline, ITSI AI service, dashboards,
+ThousandEyes).
 
-## What you end up with
-A named AI banking assistant (mine was **"Cora"**) embedded in the SPA, whose
-every conversation lights up:
-- **Splunk AI Agent Monitoring** — agent registration, traces with full
-  message content, token/latency/cost charts, LLM-as-a-judge evaluations
-- **ITSI** — an "AI agents" service (request rate / hallucinations / cost
-  KPIs), an agent entity with drilldowns, and the executive glass table
-- **ThousandEyes** synthetics against the payment API
-- A demo beat: arming the Madrid scenarios makes the assistant's traffic
-  spike with hallucinated answers and a matching cost spike.
+## The map
+| Dir | What it is |
+|---|---|
+| `base-demo/` | Your original repo — **including ~121 working-tree changes made since April** that only existed on Craig's copy (Cora SPA widgets, payment-decline handling, script/ITSI evolution). Diff list: `cluster-snapshot/base-repo-uncommitted-files.txt`. Secrets/state-captures stripped, token values redacted. |
+| `DRIFT.md` | **Read second (after this).** Every way live reality diverged from the April repo — incl. the t3→m5 node lesson and the nginx/watchdog fix. |
+| top-level `app/ k8s/ collector/ splunk-o11y/ itsi/ thousandeyes/ frontend/` | The AI layer as clean, parameterised build assets (see `README.md` build order). |
+| `itsi-export/` | The full live ITSI estate (40 services / 185 KPIs / 37 correlation searches / both glass tables) — restore these rather than rebuilding by hand. |
+| `cluster-snapshot/` + `splunk-box/` + `infra/` | Byte-exact live k8s manifests (tokens redacted), the Splunk box's nginx + watchdog files, and the current cluster spec. |
+| `harvest/` | Untouched raw exports (reference of record). |
+| `docs/` | The annotated Word guide to the agent + Splunk AI-monitoring recipe. |
 
-## Do this, in order
-1. **Read `README.md`** — the build order. Steps 0 (org flags, LLM
-   connection, the token recipe) decide success; everything else is mechanical.
-2. **Copy `config/kit.env.example` → `config/kit.env`** and fill in your
-   tokens (O11y, ThousandEyes, HEC, Anthropic). It's gitignored — keep it that way.
-3. **Make it yours** — three env vars rename the assistant everywhere
-   (`CORA_AGENT_NAME`, `CORA_AGENT_ID`, `CORA_BANK_NAME`); the SPA widget's
-   display name is one file (`frontend/README.md` points at it); glass-table
-   renaming/re-skinning is mapped in `itsi/RESKIN-NOTES.md`.
-4. **Build up**: secrets → agent/collector/loadgen → check the agent appears
-   in AI Agent Monitoring → frontend → dashboard script → ITSI script →
-   TE script.
-5. When something behaves oddly, check the README's gotcha list *first* —
-   every one of those bullets cost us real debugging hours (the ingest-token
-   role and the "histograms before first emission" rule especially).
+## Build order for a from-scratch rebuild
+1. **Infra** — `base-demo/terraform` + `infra/CLUSTER-SPEC.md`. Two updates to
+   your originals: **m5.xlarge, never t3** (burst-credit throttling took the
+   demo down), and Kubernetes 1.31.
+2. **Splunk box** — your cloud-init, then overlay `splunk-box/` (nginx
+   `spa.conf` incl. the port-80 `/__proxy_health` block, watchdog units,
+   indexes/HEC stanzas). After any node change, update the node IPs in spa.conf.
+3. **Payments demo** — your helm/services/chaos-controller as before; then
+   reconcile against `cluster-snapshot/natwest-namespace-live.yaml` for drift.
+4. **ITSI** — restore from `itsi-export/` (POST the objects back via
+   `itoa_interface`), or rebuild selectively; glass-table skinning notes in
+   `itsi/RESKIN-NOTES.md`.
+5. **AI layer** — follow `README.md` §0–7. §0 (org flags, LLM connection,
+   token-with-`ai_monitoring`-role) is where success is decided.
+6. **Customise** — assistant name/bank via env (`CORA_AGENT_NAME`,
+   `CORA_BANK_NAME`, `CORA_AGENT_ID`), SPA widget name in one file
+   (`frontend/README.md`), glass-table rename/re-skin per the notes.
 
-## Two honest caveats
-- `HARVEST-TODO.md` lists a few pieces that only live on the Splunk box
-  (the wider ITSI tree export, the second glass table, the box's nginx
-  config) — Craig will export them next time that box is powered on.
-- `docs/Splunk-AI-Agent-Monitoring-Guide.docx` is the long-form annotated
-  walkthrough of the agent code and the whole recipe — worth a skim before
-  step 4, ideal with a coffee.
+## Tokens you must supply (none are in this repo)
+`config/kit.env.example` lists them all: O11y ingest (INGEST+API scopes **and
+the ai_monitoring role** — the #1 trap), O11y API, ThousandEyes bearer + aid,
+HEC, Splunk admin, Anthropic key. Anything reading `<<REDACTED-TOKEN>>` in the
+exports is a slot for yours.
+
+## When something misbehaves
+`DRIFT.md`'s gotcha index first, then the matching section of
+`docs/Splunk-AI-Agent-Monitoring-Guide.docx`. Every bullet is a real incident
+we debugged, not theory.
 
 Questions → Craig. Enjoy!
