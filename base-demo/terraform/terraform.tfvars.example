@@ -1,0 +1,63 @@
+# Copy to terraform.tfvars and fill in. Never commit terraform.tfvars.
+#
+# Splunk Enterprise EC2 size (default in variables.tf is c5.4xlarge for ITSI).
+# splunk_enterprise_instance_type = "c5a.8xlarge"
+
+# Splunk access token should be passed via environment instead:
+#   export TF_VAR_splunk_access_token="<your-ingest-token>"
+# so it never touches disk.
+
+# Splunk Enterprise HEC tokens (3 of them) are REQUIRED and must come from
+# the environment for the same reason. Generate fresh values with `uuidgen`
+# and never commit them:
+#   export TF_VAR_splunk_enterprise_hec_token="$(uuidgen)"
+#   export TF_VAR_splunk_enterprise_hec_token_firehose="$(uuidgen)"
+#   export TF_VAR_splunk_enterprise_hec_token_scripts="$(uuidgen)"
+
+region       = "eu-west-2"
+cluster_name = "natwest-payments-demo"
+owner        = "your-name"
+
+# Restrict the EKS public API endpoint to your operator IPs.
+# Find yours with:  curl -s https://checkip.amazonaws.com
+allowed_public_api_cidrs = ["203.0.113.4/32"]
+
+splunk_realm = "us1"
+# splunk_access_token = "SET VIA TF_VAR_splunk_access_token ENV VAR"
+# splunk_api_token    = "SET VIA TF_VAR_splunk_api_token ENV VAR"
+
+# Splunk Observability config (detectors, dashboards, SLOs, synthetics).
+# Flip to true once TF_VAR_splunk_api_token is in place.
+# splunk_observability_enabled = true
+
+# ITSI alert bridge: forwards Splunk Observability detector firings into
+# ITSI Episode Review via HEC on the Splunk Enterprise EC2. Defaults to
+# true, but the SG rule that opens 8088 is also gated on a non-empty
+# egress CIDR list. The default egress list matches the eu0 realm; for
+# other realms supply your own list from
+#   https://docs.splunk.com/observability/en/admin/notif-services/about-egress.html
+# itsi_alert_bridge_enabled        = true
+# splunk_observability_egress_cidrs = ["3.248.59.20/32","3.249.21.117/32","52.31.69.49/32"]
+
+# Splunk Synthetics auto-provisioning (payments API + optional SPA /healthz +
+# optional browser login). Off by default so the org doesn't get charged for
+# synthetic device-minutes.
+# splunk_synthetics_enabled       = true
+# splunk_synthetic_target_url     = "https://itsi.splunk-observability.com/api/v1/payments/process"
+# splunk_synthetic_browser_url    = "https://itsi.splunk-observability.com/login"
+# splunk_synthetic_spa_health_url = "https://itsi.splunk-observability.com/healthz"
+# External watchdog for the nginx public proxy itself (paired with the
+# on-host systemd watchdog installed by scripts/05b-frontend-public-proxy.sh):
+# splunk_synthetic_proxy_health_url = "http://itsi.splunk-observability.com/__proxy_health"
+
+# Microsoft Teams alert bridge: opt-in extra notification channel for the
+# Splunk Observability detectors provisioned by observability.tf. Enabling
+# this lights up the Path-to-Green "Microsoft Teams integration" row
+# (section 7) with a live demo - alerts appear in your Teams channel
+# within seconds of detector firing. Both vars must be set together; the
+# webhook URL is secret-equivalent so always pass it via TF_VAR rather
+# than committing it to terraform.tfvars:
+#   export TF_VAR_microsoft_teams_alert_enabled=true
+#   export TF_VAR_microsoft_teams_webhook_url="https://<tenant>.webhook.office.com/..."
+# Get the webhook URL from Teams: Channel -> Connectors -> Incoming Webhook.
+# microsoft_teams_alert_enabled = true

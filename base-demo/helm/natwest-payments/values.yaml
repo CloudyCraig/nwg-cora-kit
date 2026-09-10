@@ -1,0 +1,944 @@
+# NatWest Payment Platform demo - Helm values
+#
+# The `services` map below is the single source of truth for the topology
+# shown in the architecture diagram. Each entry creates one Deployment +
+# Service. Downstreams are Kubernetes DNS names of peer services.
+
+image:
+  repository: REPLACE_ME_ECR_URL           # e.g. 123456789012.dkr.ecr.eu-west-2.amazonaws.com/natwest-payments-service
+  tag: "0.1.0"
+  pullPolicy: IfNotPresent
+  imagePullSecrets: []
+
+# Namespace is created outside the chart (scripts/03-deploy.sh)
+namespace: natwest
+
+# Resources applied to every service pod (tune per-service with `resources:` below).
+defaultResources:
+  requests:
+    cpu: "25m"
+    memory: "96Mi"
+  limits:
+    cpu: "200m"
+    memory: "256Mi"
+
+# Points each pod at the Splunk OTel Collector agent running on the same node.
+otel:
+  # The Splunk OTel Collector Helm chart installs an agent DaemonSet that
+  # listens on the node's hostIP on these ports. We surface hostIP via
+  # the Downward API in the Deployment template.
+  otlpGrpcPort: 4317
+  otlpHttpPort: 4318
+  environment: "demo"
+  deployment: "natwest-payments-demo"
+  # Splunk AlwaysOn Profiling. Sends per-thread CPU + memory call stacks to
+  # Splunk Observability over OTLP logs. Requires the collector chart to be
+  # installed with `splunkObservability.profilingEnabled=true`.
+  profilingEnabled: true
+  profilingCallStackIntervalMs: 1000
+
+serviceAccount:
+  create: true
+  name: natwest-payments
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  fsGroup: 10001
+  seccompProfile:
+    type: RuntimeDefault
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]
+
+# Global defaults per service (overridable in `services.<name>.*`).
+defaults:
+  port: 8080
+  latencyMsMean: 25
+  latencyMsStddev: 8
+  errorRate: 0.01
+  fanout: "all"
+  replicas: 1
+  # Tail-latency injection defaults. Off by default (rate=0); only the two
+  # services with a story to tell (sanctions-aml, swift-network) override
+  # this in the topology block below.
+  tailLatencyRate: 0.0
+  tailLatencyMinMs: 1500
+  tailLatencyMaxMs: 4500
+  # Per-scheme error multiplier; empty string disables. Use "SWIFT:3,CHAPS:2"
+  # to multiply the base error rate for matching `payment.scheme`.
+  schemeErrorMultipliers: ""
+  # gunicorn concurrency. The default 2x4 is enough for low-RPS demos but
+  # caps top-of-tree services around ~10 RPS once tail-latency is injected.
+  # Bumping to 4x16 keeps p50 healthy at 30 RPS through api-gateway.
+  gunicornWorkers: 2
+  gunicornThreads: 4
+  # Downstream HTTP timeout. Must be higher than the tail-latency max so the
+  # injected long-tail produces visible long spans rather than timeouts (the
+  # whole point is to show p99 outliers in Splunk APM).
+  downstreamTimeoutS: 6.0
+
+##############################################################################
+# Tier-aware behaviour (Bronze / Silver / Gold customer tiers)
+#
+# Every service pod receives these strings via env (see deployment.yaml). The
+# Python app/service.py parses them into per-tier probabilities, identical
+# format to SCHEME_ERROR_MULTIPLIERS:
+#
+#   fraudFastPathProb: chance per tier that /process *skips* the slow fraud
+#     code path (cache-miss tail latency + heavy feature kernel). Tuned so
+#     that Gold customers feel a measurable median latency improvement on
+#     dashboards but Bronze still has *some* fast paths (so the tier
+#     dimension is not mistaken for "broken on Bronze").
+#
+#   throttleProb: chance per tier that the api-gateway returns HTTP 429
+#     (mapped to span attribute payment.throttled=true + status_code=429).
+#     Default keeps Bronze visible at ~3% on the decline-rate-by-tier chart
+#     without breaking the rest of the demo. Silver/Gold are zero so the
+#     incident.sh inject-tier-throttle <tier> beat has clean before/after
+#     contrast.
+#
+# Tier strings are intentionally *not* enums in YAML so we can keep the same
+# parser the existing SCHEME_ERROR_MULTIPLIERS code path uses (split on
+# "," then on ":"), which means new tiers can be added in YAML alone.
+##############################################################################
+tierBehaviour:
+  fraudFastPathProb: "bronze:0.0,silver:0.2,gold:0.6"
+  throttleProb: "bronze:0.03,silver:0.0,gold:0.0"
+
+##############################################################################
+# Traffic generator settings (reference / documentation block).
+#
+# The traffic-generator is NOT deployed by this Helm chart - it has its
+# own static manifest at traffic-generator/deployment.yaml, applied by
+# scripts/04-start-traffic.sh. The values below mirror the defaults set
+# in that manifest so operators have a single place to look up the
+# European load-generator knobs.
+#
+# To change live without rebuilding the image (the demo workflow), use:
+#
+#   kubectl -n natwest set env deploy/traffic-generator \
+#     LOCATION_MIX="london:50,madrid:30,frankfurt:10,paris:10"
+#
+#   kubectl -n natwest set env deploy/traffic-generator \
+#     LOCATION_LATENCY_PROFILES="madrid:1500/300"
+#
+# The generator picks one city per request weighted by `locationMix`, sleeps
+# for a gaussian RTT sample (city baseline OR override from
+# `locationLatencyProfiles`), and tags every span with customer.location /
+# customer.country / customer.region / customer.lat / customer.lon.
+#
+# Grammar:
+#   locationMix              "<city>:<weight>,<city>:<weight>,..."
+#   locationLatencyProfiles  "<city>:<mean_ms>/<stddev_ms>,..."
+#
+# Known cities (LOCATIONS table in traffic-generator/generate.py):
+#   london, frankfurt, paris, madrid, milan, amsterdam, dublin, lisbon, brussels
+##############################################################################
+trafficGenerator:
+  # Realistic European retail-bank mix. London dominates (NatWest is UK),
+  # Madrid is intentionally weighted high enough to make its elevated RTT
+  # visible on every "by customer.location" panel.
+  locationMix: "london:40,frankfurt:18,paris:14,madrid:10,milan:8,amsterdam:4,dublin:3,lisbon:2,brussels:1"
+  # Empty string => use the baseline RTTs in the LOCATIONS table:
+  #   london     50 +/-  15 ms
+  #   frankfurt 100 +/-  25 ms
+  #   paris      80 +/-  20 ms
+  #   madrid    450 +/- 120 ms   <-- the deliberately-degraded city
+  #   milan     150 +/-  35 ms
+  #   amsterdam  80 +/-  20 ms
+  #   dublin     60 +/-  15 ms
+  #   lisbon    180 +/-  40 ms
+  #   brussels   90 +/-  20 ms
+  locationLatencyProfiles: ""
+  # Time-of-day curve, JSON of {hour: 0..23, rps}. Linearly interpolated.
+  # Aggregate ~2.0-2.5 M payments per 24 h - about 1 % of a real UK retail
+  # bank's daily card volume. Peak 50 RPS ~= 3,000 TPM at 17:00 UK time.
+  rpsSchedule: '[{"hour":0,"rps":3},{"hour":7,"rps":10},{"hour":9,"rps":40},{"hour":12,"rps":30},{"hour":13,"rps":30},{"hour":15,"rps":40},{"hour":17,"rps":50},{"hour":20,"rps":15},{"hour":23,"rps":3}]'
+  # Saturday + Sunday curve. Flatter than weekdays with a later peak
+  # (14:00-18:00 leisure-shopping bump) and a longer evening
+  # contactless-low-value tail. Aggregate ~60-70% of weekday volume.
+  # Leave empty to reuse rpsSchedule every day.
+  rpsScheduleWeekend: '[{"hour":0,"rps":3},{"hour":8,"rps":6},{"hour":11,"rps":18},{"hour":14,"rps":32},{"hour":18,"rps":36},{"hour":21,"rps":22},{"hour":23,"rps":6}]'
+  rpsScheduleTz: "Europe/London"
+  # Persona tier mix shared with the SPA / Helm tierBehaviour grammar.
+  tierMix: "bronze:60,silver:30,gold:10"
+  # Fraction of payments where customer.home_country differs from
+  # customer.country (the city the request came from). 0.05 = ~5%
+  # baseline cross-border activity for the fraud-detection story; dial
+  # higher live to simulate a coordinated travel-fraud incident.
+  roamingRate: "0.05"
+  # Bank-holiday calendar. When true, the city whose country is on a
+  # public holiday today gets weight=0 in _pick_location(), so the
+  # by-location panels show "Spain went dark" naturally. Use
+  # bankHolidayDateOverride="MM-DD" (e.g. "10-12" for Spanish
+  # Hispanidad) to simulate a holiday on a normal Tuesday.
+  bankHolidaysEnabled: "true"
+  bankHolidayDateOverride: ""
+
+##############################################################################
+# 24-service NatWest Payment Platform topology
+# (derived from the architecture diagram)
+##############################################################################
+services:
+
+  # ---- API Gateway -------------------------------------------------------
+  api-gateway:
+    tier: gateway
+    latencyMsMean: 12
+    # payment-initiation-service fans out to eight downstreams (each with
+    # up to downstreamTimeoutS). Under demo load the initiation hop often
+    # lands at ~6-7s wall-clock; a 6s gateway timeout races that bound and
+    # the SPA sees intermittent 502 payment_initiation_failure responses.
+    downstreamTimeoutS: 12
+    # Two replicas x 4 gunicorn workers x 16 threads = up to 128
+    # concurrent in-flight, matching the traffic-gen worker pool and
+    # leaving headroom for cascade tails. Safe to scale here because
+    # the read-API ring buffer is now Redis-backed (see
+    # readApiRedisUrl below) - all gateway pods share the same view
+    # of recent payments, so "submit then look up" works regardless
+    # of which pod served the POST and which pod serves the GET.
+    replicas: 2
+    downstreams:
+      - payment-initiation-service
+      - user-service
+      - customer-profile-service
+    gunicornWorkers: 4
+    gunicornThreads: 16
+    # Read-API endpoints (GET /recent, GET /status/<id>) - exposed publicly
+    # to the SPA via the public nginx proxy /api/* path, so every page
+    # navigation in the SPA produces a fetch span that pivots from RUM
+    # into APM. Only the gateway tier needs these populated; deeper
+    # services inherit the empty defaults from app/service.py and the
+    # endpoints become free-standing single-span lookups instead of
+    # multi-service traces - which is fine, but pointing /status at the
+    # existing payment-status-service makes the trace visibly mirror
+    # the "gateway -> payment-status-service" service-map edge.
+    readApiRecentDownstreams: ""
+    readApiStatusDownstreams: "payment-status-service"
+    # Redis-backed ring buffer for the read-API. db=2 to keep it isolated
+    # from the demo cache databases used by sanctions (db=0) and
+    # fraud-detection (db=1) so the cache-cold incident demo can't ever
+    # accidentally evict the SPA's recent-payments view. Each redis
+    # client span produced here picks up peer.service=redis from the
+    # RedisInstrumentor hook in app/service.py, which is what makes
+    # the resulting APM trace render as "api-gateway -> redis" on the
+    # service map (and gives the audience a second hop to talk about
+    # when they pivot from a RUM fetch span).
+    readApiRedisUrl: "redis://redis.natwest.svc.cluster.local:6379/2"
+    # Surface the gateway on a fixed NodePort so the public-facing nginx
+    # reverse proxy on the Splunk Enterprise EC2 (scripts/05b-frontend-
+    # public-proxy.sh) can route /api/* directly to it without going via
+    # the in-cluster web-frontend Service. This is the SCP-friendly
+    # alternative to a `LoadBalancer`-typed Service, which is denied by
+    # an org-level Service Control Policy.
+    serviceType: NodePort
+    nodePort: 30680
+    # Enable the audit emitter + audit-tail sidecar on the gateway. Only
+    # the gateway tier emits banking-audit / SPA-auth records into the
+    # nwpay_audit Splunk index (deployment.yaml gates on this flag).
+    auditEnabled: true
+    resources:
+      requests:
+        cpu: "200m"
+        memory: "192Mi"
+      limits:
+        cpu: "1500m"
+        memory: "512Mi"
+
+  # ---- Experience Services ----------------------------------------------
+  user-service:
+    tier: experience
+    latencyMsMean: 15
+  notification-service:
+    tier: experience
+    latencyMsMean: 20
+  customer-profile-service:
+    tier: experience
+    latencyMsMean: 18
+  limits-service:
+    tier: experience
+    latencyMsMean: 10
+
+  # ---- Payment Services -------------------------------------------------
+  # payment-initiation-service: first-tier fan-out node (8 downstreams).
+  # Boosted gunicorn concurrency + CPU keeps it from being the chain
+  # bottleneck under 30 RPS load.
+  payment-initiation-service:
+    tier: payment
+    latencyMsMean: 35
+    # The biggest fan-out node (8 downstreams) is the throughput choke point.
+    # Three replicas x 2 workers x 24 threads = 144 concurrent slots, with
+    # enough headroom that /readyz keeps getting served even when most of
+    # the workers are blocked waiting on a downstream tail-latency call.
+    replicas: 3
+    gunicornWorkers: 2
+    gunicornThreads: 24
+    resources:
+      requests:
+        cpu: "150m"
+        memory: "192Mi"
+      limits:
+        cpu: "1000m"
+        memory: "512Mi"
+    # settlement-service is removed from this synchronous fan-out (it now
+    # consumes asynchronously from the Kafka topic produced below). Keeping
+    # the visual edge alive via Kafka demonstrates async tracing in Splunk APM.
+    downstreams:
+      - customer-profile-service
+      - limits-service
+      - payment-validation-service
+      - fee-pricing-service
+      - routing-service
+      - ledger-service
+      - notification-service
+      - payment-status-service
+    # Publishes a settlement message to Kafka after a successful /process.
+    # OTel kafka-python instrumentation injects W3C traceparent into the
+    # message headers so the consumer-side trace on settlement-service
+    # continues this trace. With peer.service defaulting to "kafka"
+    # (no override here), Splunk APM:
+    #   * draws an async edge:  payment-initiation-service -> kafka
+    #   * draws a consumer edge: kafka -> settlement-service
+    #     (followed automatically by settlement -> reconciliation ->
+    #     reporting because each of those is a normal HTTP downstream)
+    # The kafka tile is drawn with the inferred Kafka swirl glyph and
+    # disappears only if the broker truly stops accepting producers
+    # (which is exactly what the `kafka-outage` chaos scenario should
+    # demonstrate). See infrastructure.heartbeat for why we no longer
+    # synthesise a heartbeat-driven first-class kafka service entity.
+    kafkaProducerEnabled: true
+    kafkaBootstrapServers: "kafka.natwest.svc.cluster.local:9092"
+    kafkaTopic: "payments.settled"
+  # payment-validation-service sits on the synchronous critical path of
+  # every /process call (one of payment-initiation-service's 8 downstreams)
+  # and fans out to 4 of its own. On the default 200m CPU limit a single
+  # replica gets throttled under the demo's 30 RPS load, the gunicorn
+  # worker can't service /readyz within the probe's 8 s budget, and
+  # kubelet flaps the pod between Ready / NotReady every ~14 s. That in
+  # turn drops the validator out of payment-initiation-service's
+  # endpoints intermittently, causing the connect-timeout cascade that
+  # makes ThousandEyes TE-04 / TE-05 land on "partial" status for every
+  # synthetic POST. Two replicas + a payment-tier-typical CPU/memory
+  # budget eliminate the throttling without resizing the EKS node group.
+  payment-validation-service:
+    tier: payment
+    latencyMsMean: 40
+    replicas: 2
+    resources:
+      requests:
+        cpu: "100m"
+        memory: "128Mi"
+      limits:
+        cpu: "800m"
+        memory: "384Mi"
+    downstreams:
+      - account-service
+      - beneficiary-service
+      - sanctions-aml-service
+      - fraud-detection-service
+  routing-service:
+    tier: payment
+    latencyMsMean: 22
+    # Hot path for every payment; a single replica becomes the routing-
+    # service read-timeout source that turns the whole APM map red.
+    replicas: 2
+    gunicornWorkers: 4
+    gunicornThreads: 12
+    # One scheme gets chosen per payment.
+    fanout: "random:1"
+    downstreams:
+      - faster-payments-network
+      - bacs-network
+      - chaps-network
+      - swift-network
+      - sepa-network
+      - cheque-clearing-network
+  fee-pricing-service:
+    tier: payment
+    latencyMsMean: 14
+  payment-status-service:
+    tier: payment
+    latencyMsMean: 10
+
+  # ---- Business Services ------------------------------------------------
+  account-service:
+    tier: business
+    latencyMsMean: 22
+  beneficiary-service:
+    tier: business
+    latencyMsMean: 18
+  # sanctions-aml-service: realistic external-screening pathology - normal
+  # latency is moderate, but ~3% of requests hit a long tail (e.g. third-party
+  # screening API rate-limit / contended DB lock). Drives the "long tail" demo.
+  # Tail capped at 2.5s so the upstream chain doesn't pile up workers.
+  sanctions-aml-service:
+    tier: business
+    # 3 replicas (24 worker slots) so the madrid-payment-degradation fault —
+    # which holds a worker ~2s per ES request (real + synthetic Madrid traffic)
+    # — doesn't saturate a single pod. On 1 replica the queue builds and ES
+    # payment latency climbs to the 6s downstream timeout, turning the clean
+    # "regional failover exhausted" APM trace into a generic timeout cascade
+    # (regressed 2026-07-02; fixed by scaling to 3). Keep >=3 while the AML
+    # scenario is part of the demo.
+    replicas: 3
+    latencyMsMean: 55
+    errorRate: 0.015
+    # Names the external AML-screening dependency the madrid-payment-degradation
+    # fault reports (the inferred APM node + "primary AML screening provider for
+    # region ES timed out …; secondary failover exhausted" message). Represents
+    # LSEG World-Check's EU-South endpoint. Chaos scenario arms the fault at
+    # runtime; this name persists. (Was the code default aml-screening-provider-eu-south.)
+    slowLocationDependency: lseg-world-check-eu-south
+    tailLatencyRate: 0.03
+    tailLatencyMinMs: 1500
+    tailLatencyMaxMs: 2500
+    # Redis cache (sanctions / PEP-list lookups). On a hit we skip the tail-
+    # latency code path. CACHE_HIT_RATE=0.97 means ~3% miss rate, lining up
+    # with the existing tailLatencyRate so the demo numbers are consistent.
+    # Drop CACHE_HIT_RATE via scripts/incident.sh cache-cold to demo a cache
+    # warm-up incident.
+    cacheEnabled: true
+    cacheUrl: "redis://redis.natwest.svc.cluster.local:6379/0"
+    cacheHitRate: 0.97
+    cacheKeyNamespace: "sanctions"
+  # fraud-detection-service: the critical-path bottleneck. Higher mean and
+  # very wide stddev produce a believable p99 outlier on the SWIFT/CHAPS
+  # critical path. SWIFT and CHAPS payments hit fraud-detection harder (3x
+  # error rate) - the story: "fraud-detection is twitchy on high-value
+  # cross-border, and that's what's pushing SWIFT past its SLA."
+  fraud-detection-service:
+    tier: business
+    latencyMsMean: 110
+    latencyMsStddev: 120
+    errorRate: 0.02
+    schemeErrorMultipliers: "SWIFT:3,CHAPS:2"
+    # Fraud feature-store cache. Lower hit rate than sanctions because some
+    # features (e.g. velocity counters) genuinely need to be recomputed.
+    cacheEnabled: true
+    cacheUrl: "redis://redis.natwest.svc.cluster.local:6379/1"
+    cacheHitRate: 0.85
+    cacheKeyNamespace: "fraud_features"
+    # Fraud feature extractor kernel: enabled here so AlwaysOn Profiling has
+    # a stable baseline flame graph for this service. Default algorithm is
+    # the linear (cheap) fingerprint. The CPU regression incident
+    # (`scripts/incident.sh fraud-cpu-regression`) flips
+    # CPU_REGRESSION_ENABLED=true on this deployment, swapping in the
+    # quadratic kernel and producing a clean profiling-diff demo beat.
+    fraudFeatureExtractorEnabled: true
+    fraudFeatureCount: 96
+    cpuRegressionEnabled: false
+
+  # ---- Ledger & Settlement ---------------------------------------------
+  # Polyglot Java service. Replaces the previous Python ledger-service. Uses
+  # the Splunk OTel Java agent for auto-instrumentation (Spring Web + JDBC),
+  # which makes Postgres show up as an inferred infrastructure node in the
+  # service map. Probes hit Spring Boot Actuator paths.
+  #
+  # Note: the synchronous downstream `settlement-service` is gone here - that
+  # node is now driven by the Kafka topic produced by payment-initiation-service.
+  ledger-service:
+    tier: ledger
+    # Java-based Spring Boot service. The template uses this to pick the
+    # correct OTEL_LOGS_EXPORTER spelling (Java agent rejects the Python
+    # `otlp_proto_grpc` value, which previously caused the Splunk OTel
+    # Java agent to fail SDK initialisation silently and stop emitting
+    # any spans - the symptom was ledger-service showing as an inferred-
+    # only floating node on the Splunk Observability Service Map with no
+    # Postgres edge).
+    language: java
+    latencyMsMean: 30
+    image:
+      repository: REPLACE_ME_ECR_LEDGER_JAVA_URL
+      # 0.1.7 is the first build that runs the real Postgres `SELECT pg_sleep()`
+      # under db-slow (holds a pooled JDBC connection -> HikariCP exhaustion ->
+      # 5xx cascade -> visible in APM/Postgres/ITSI). Builds <= 0.1.1 only did a
+      # Java-side Thread.sleep and produced no pg_sleep span and no pool drama,
+      # which silently breaks the db-slow demo. Do NOT drop below 0.1.7 without
+      # rebuilding pg_sleep. See docs/customer/story-rum-apm-postgres.md.
+      tag: "0.1.7"
+    readinessPath: "/actuator/health/readiness"
+    readinessInitialDelaySeconds: 30
+    springDatasourceUrl: "jdbc:postgresql://postgres.natwest.svc.cluster.local:5432/ledger"
+    dbCredentialsSecret: "postgres-credentials"
+    resources:
+      requests:
+        cpu: "200m"
+        memory: "384Mi"
+      limits:
+        cpu: "1000m"
+        memory: "768Mi"
+  # Async fan-out leaf. Was previously a synchronous downstream of
+  # payment-initiation-service; now consumes the `payments.settled` Kafka
+  # topic that payment-initiation-service produces to. OTel kafka-python
+  # instrumentation propagates the W3C traceparent header on the Kafka
+  # message, so Splunk APM stitches the async edge end-to-end.
+  settlement-service:
+    tier: ledger
+    latencyMsMean: 45
+    downstreams:
+      - reconciliation-service
+    kafkaConsumerEnabled: true
+    kafkaBootstrapServers: "kafka.natwest.svc.cluster.local:9092"
+    kafkaTopic: "payments.settled"
+    kafkaConsumerGroup: "settlement-service"
+  reconciliation-service:
+    tier: ledger
+    latencyMsMean: 40
+    downstreams:
+      - reporting-service
+  reporting-service:
+    tier: ledger
+    latencyMsMean: 25
+
+  # ---- External Payment Networks (leaf simulators) ----------------------
+  faster-payments-network:
+    tier: network
+    latencyMsMean: 60
+    latencyMsStddev: 25
+    errorRate: 0.005
+  bacs-network:
+    tier: network
+    latencyMsMean: 95
+    latencyMsStddev: 40
+  chaps-network:
+    tier: network
+    latencyMsMean: 110
+    latencyMsStddev: 30
+    errorRate: 0.01
+  # swift-network: external counterparty flap. 3x error rate compared to other
+  # networks, plus an occasional long tail. Story: cross-border SWIFT is the
+  # dominant source of payment failures in the cluster.
+  swift-network:
+    tier: network
+    latencyMsMean: 180
+    latencyMsStddev: 90
+    errorRate: 0.05
+    tailLatencyRate: 0.04
+    tailLatencyMinMs: 2000
+    tailLatencyMaxMs: 6000
+  sepa-network:
+    tier: network
+    latencyMsMean: 80
+    latencyMsStddev: 25
+  cheque-clearing-network:
+    tier: network
+    latencyMsMean: 130
+    latencyMsStddev: 50
+
+##############################################################################
+# In-cluster infrastructure (Redis, Postgres, Kafka)
+#
+# Each block is rendered by the matching template ([helm/natwest-payments/templates/redis.yaml],
+# postgres.yaml, kafka.yaml). Disable any block to skip the corresponding
+# Deployment + Service. Cluster-internal only - none of these are exposed
+# outside the namespace, and credentials are demo-grade (NOT FOR PRODUCTION).
+##############################################################################
+infrastructure:
+  # NOTE: Bitnami stopped publishing the bitnami/* semver tags for the
+  # data-store images (postgres, kafka) on Docker Hub in 2025, and the
+  # bitnamilegacy/* mirrors changed to a layout that doesn't tolerate
+  # readOnlyRootFilesystem-style hardening. We use official upstream images
+  # for those (Redis Inc, PostgreSQL Global Dev Group, Apache) - they're
+  # smaller, signed, and run cleanly under the demo's non-root
+  # podSecurityContext. Instrumentation is added via Prometheus exporter
+  # sidecars (redis_exporter, postgres_exporter, jmx_exporter) and a
+  # corresponding `prometheus/infra` receiver in the OTel collector
+  # (collector/values.yaml). bitnami/jmx-exporter is one of the few bitnami
+  # *utility* images still published, so we use it as-is.
+  redis:
+    enabled: true
+    image: "redis:7.4-alpine"
+    port: 6379
+    maxmemory: "128mb"
+    exporter:
+      image: "oliver006/redis_exporter:v1.61.0"
+      port: 9121
+  postgres:
+    enabled: true
+    image: "postgres:16-alpine"
+    port: 5432
+    username: "ledger"
+    # Demo-only credentials. Rotated by redeploying the chart with overrides.
+    password: "ledger-demo-pass"
+    database: "ledger"
+    exporter:
+      image: "quay.io/prometheuscommunity/postgres-exporter:v0.15.0"
+      port: 9187
+    # Read-only role used by postgres_exporter (created at first boot via
+    # initdb 02_monitoring.sql, see helm/natwest-payments/templates/postgres.yaml).
+    # Override the password from scripts/00-provision.sh
+    # (`--set infrastructure.postgres.monitoringUser.password=<random>`)
+    # so two demo deployments in the same cluster don't share credentials.
+    monitoringUser:
+      # Postgres reserves the pg_* namespace for built-in roles, so we name
+      # the read-only monitoring role payments_exporter rather than pg_exporter.
+      username: "payments_exporter"
+      password: "pg-exporter-demo-pass"
+  kafka:
+    enabled: true
+    image: "apache/kafka:3.7.0"
+    port: 9092
+    controllerPort: 9093
+    clusterId: "natwest-payments-demo-cluster"
+    topics:
+      - "payments.settled"
+    jmx:
+      # We attach the prometheus/jmx_exporter Java agent to the broker JVM
+      # via KAFKA_OPTS. Bitnami stopped publishing bitnami/jmx-exporter
+      # tags on Docker Hub in 2025 (see comment block above), so we fetch
+      # the upstream agent jar from Maven Central in an init container
+      # and mount it into the broker. agentVersion below pins the
+      # release; agentFetchImage is just a thin curl wrapper.
+      agentVersion: "0.20.0"
+      agentFetchImage: "curlimages/curl:8.10.1"
+      exporterPort: 5556   # Prometheus HTTP endpoint exposed by the agent
+
+  # infra-heartbeat: a CronJob that emits one synthetic OTLP span per minute
+  # for redis / postgres / kafka. Originally added to promote the otherwise-
+  # inferred db/queue icons in the Splunk Observability APM service map into
+  # first-class service entries (gaining the Logs / Related Content tabs).
+  #
+  # DISABLED by default since 2026-06-11. The branded inferred glyphs
+  # (Postgres elephant / Redis cube / Kafka swirl) only render when NO
+  # `service.name=<broker>` span has landed in the APM service-entity TTL
+  # window. With the heartbeat enabled, APM merges the trace-inferred
+  # infrastructure node into the heartbeat-created service entity and
+  # replaces the branded icon with a generic round service circle.
+  #
+  # Once ledger-service got its Splunk OTel Java agent attached (commit
+  # 764cfd1), the Hibernate/JDBC instrumentation started emitting 11k+
+  # client spans per 5min with `peer.service=postgres`, which gives APM
+  # plenty to infer the Postgres elephant from. Redis is similarly
+  # well-inferred from sanctions-aml-service, fraud-detection-service and
+  # api-gateway redis client spans (21k+ per 5min combined). Kafka is now
+  # also inferred naturally because the kafkaPeerService override on
+  # payment-initiation-service was reverted to the default "kafka" - the
+  # producer span draws the payment-init -> kafka edge and the consumer
+  # span on settlement-service continues the trace, drawing kafka ->
+  # settlement -> reconciliation -> reporting.
+  #
+  # Trade-off accepted: during the `kafka-outage` chaos scenario the
+  # Kafka tile disappears after APM TTL (~30 min) because no producer
+  # span lands while the broker is down. This is actually the *correct*
+  # visual story for that chaos ("Kafka is down"), and recovery is
+  # instantaneous - the tile reappears within seconds of the broker
+  # accepting producers again. The ITSI consumer-idle correlation
+  # search and the chaos audit notable still narrate the outage.
+  #
+  # Re-enable only if a future demo needs the "click here for broker
+  # logs" Log Observer pivot directly from the APM map (note: that
+  # pivot requires the broker logs to be in Log Observer Connect,
+  # which this demo does NOT have wired - logs land in Splunk
+  # Enterprise's `nwpay_infra` index). See
+  # helm/natwest-payments/templates/infra-heartbeat-cronjob.yaml.
+  heartbeat:
+    enabled: false
+    schedule: "* * * * *"           # every minute
+    image: "curlimages/curl:8.10.1"
+
+##############################################################################
+# Web frontend (React + Splunk RUM)
+#
+# Rendered by [helm/natwest-payments/templates/web-frontend.yaml] when enabled.
+# The frontend container reads the gateway URL and the RUM access token from a
+# runtime ConfigMap so the same image works across realms.
+##############################################################################
+frontend:
+  enabled: false  # turned on in scripts/05-deploy-frontend.sh after the gateway LoadBalancer is up
+  image:
+    repository: "REPLACE_ME_ECR_FRONTEND_URL"
+    tag: "0.1.0"
+    # Pull policy Always (not IfNotPresent) is deliberate. The SPA's
+    # entire TypeScript surface - personas.ts (customer roster),
+    # payees.ts (saved-payee catalogue), accounts.ts (account hero
+    # numbers) - is Vite-bundled at docker build time into a single
+    # hashed JS file inside the image. The image tag is held stable
+    # at "0.1.0" so the existing build chain (scripts/01-build-push.sh
+    # + scripts/05-deploy-frontend.sh) is a one-shot rebuild without
+    # the operator having to remember to bump versions.
+    # With IfNotPresent any node that already had a cached :0.1.0
+    # would keep serving the old bundle - in practice we saw the SPA
+    # never picking up new personas after a rebuild because nodes
+    # short-circuited the pull. Always trades a tiny pod-start
+    # latency cost (one ECR HEAD round-trip) for a deterministic
+    # "every helm upgrade ships the latest bundle" guarantee.
+    pullPolicy: Always
+  replicas: 1
+  service:
+    # In a "clean" account the ideal demo experience is `LoadBalancer`
+    # (single externally-routable URL), but this account's AWS Organization
+    # SCP explicitly denies `elasticloadbalancing:CreateLoadBalancer`, so we
+    # default to `NodePort` and front the SPA with the nginx reverse proxy
+    # running on the Splunk Enterprise EC2 (see scripts/05b-frontend-public-
+    # proxy.sh). The fixed nodePort below means the EKS worker-node SG rule
+    # in terraform/splunk_enterprise.tf can be a static port range and
+    # doesn't need to be reconciled on every helm upgrade.
+    type: NodePort
+    port: 80
+    targetPort: 8080
+    nodePort: 30598
+  rum:
+    realm: ""
+    accessToken: ""
+    applicationName: "natwest-payments-web"
+    deploymentEnvironment: "demo"
+  # Demo-grade SPA login gate. The plaintext password is NEVER stored in
+  # this file (codeguard-1-hardcoded-credentials). Two ways to populate
+  # the chart at deploy time:
+  #
+  #   * Preferred (the deploy script does this for you):
+  #       --set frontend.auth.passwordSha256=$(printf '%s' "$pw" | shasum -a 256 | awk '{print $1}')
+  #
+  #   * Fallback (chart hashes once at render):
+  #       --set frontend.auth.password="$pw"
+  #
+  # If `enabled: true` and neither passwordSha256 nor password is supplied
+  # at render time, the chart fails with a helpful error rather than
+  # silently shipping an unauthenticated SPA.
+  auth:
+    enabled: true
+    username: "admin"
+    passwordSha256: ""   # populated by scripts/05-deploy-frontend.sh from $WEB_AUTH_PASSWORD
+    password: ""         # never set this in values.yaml; pass via --set only
+  # Gateway URL injected at runtime via /config.js. Empty string means the
+  # frontend will discover the gateway on demand from the same origin.
+  gatewayUrl: ""
+  # Cross-launch links rendered into the SPA's top-nav as
+  # "Observability", "ITSI" and "ThousandEyes" buttons (open in a new
+  # tab, rel=noopener noreferrer). Empty string => hide the link.
+  #
+  # Typical values for a Splunk Cloud + on-prem ITSI + Cisco TE demo:
+  #   observabilityUrl: "https://app.eu0.signalfx.com/#/apm/services"
+  #     (or any starting view -- Service Map / Tag Spotlight / RUM.
+  #      "eu0" should match frontend.rum.realm so the user lands in
+  #      the same region as the RUM agent reports to.)
+  #   itsiUrl: "https://itsi.example.com:8000/en-US/app/itsi/itsi_event_review"
+  #     (Episode Review tells the same story as the SPA's chaos
+  #      injections; alternative: services_analyzer or a Glass Table
+  #      link, e.g. ".../app/itsi/glasstable?glass_table_id=...".)
+  #   thousandEyesUrl: "https://app.thousandeyes.com/?aid=12345#/views/tests"
+  #     (TE Views > Tests scoped to the demo account group. Drop the
+  #      ?aid= when there's only one account group, or point at a
+  #      specific test view such as
+  #      "https://app.thousandeyes.com/#/views/tests/<testId>" to land
+  #      directly on the synthetic test featured in the demo.)
+  #
+  # The chart does no URL validation -- whatever you set lands in
+  # /config.js verbatim. Operators are expected to point at HTTPS
+  # endpoints; an http:// value will still render, but the
+  # downgrade-from-HTTPS prompt will fire in modern browsers.
+  observabilityUrl: ""
+  itsiUrl: ""
+  thousandEyesUrl: ""
+
+##############################################################################
+# Synthetic demo-events emitter (DORA / ATM estate / Open Banking TPP /
+# FinOps). Powers the Tier 3-5 glass-table panels added to
+# itsi/glass-table/natwest-payments-overview.xml. Each CronJob run emits
+# one set of records to nwpay_audit / nwpay:demo_event with an
+# `event_type` discriminator.
+##############################################################################
+demoEvents:
+  enabled: true
+  # Lightweight Alpine image: gives us /bin/sh + busybox tools (head,
+  # od, date, tr, printf) without dragging in Python or curl.
+  image: "alpine:3.19"
+  schedule: "*/2 * * * *"
+  # ATM estate: number of simulated ATMs and outage probability per run.
+  # Defaults match a major UK city (~ 240 branch ATMs, ~ 0.8% degraded).
+  atmCount: 240
+  atmOutagePermille: 8
+  # PSD2 / Open Banking TPP partner names. Keep to well-known UK / EU
+  # licensed Open Banking aggregators.
+  tppNames: "TrueLayer,Plaid,Yapily,Tink,Token"
+  # Deploy outcome distribution (per 1000 deploys).
+  deployRollbackPermille: 80
+  deployFailPermille: 30
+
+##############################################################################
+# ServiceNow simulator. A tiny in-cluster pod that pretends to be ServiceNow
+# so the demo can show "detector -> ITSI Episode -> ServiceNow ticket"
+# end-to-end without a real ServiceNow Developer instance. Disabled by
+# default to keep the demo footprint minimal; the Tier 2 ticketing
+# storyline flips this to true via scripts/03-deploy.sh or a one-shot
+# `helm upgrade --set snowSimulator.enabled=true`.
+#
+# Container image: any Python 3 runtime. python:3.12-slim is the smallest
+# vetted base that still has stdlib http.server available; no pip install
+# required because the simulator uses stdlib only (codeguard-0-supply-chain
+# -security: zero third-party dependencies).
+##############################################################################
+snowSimulator:
+  enabled: true
+  image: "python:3.12-slim"
+  port: 8080
+  # ClusterIP is the safe default (only the ITSI alert bridge inside the
+  # cluster needs to reach the webhook). Set to NodePort + portforward
+  # the dashboard for the live demo, or expose via the public SPA proxy
+  # at scripts/05b-frontend-public-proxy.sh.
+  serviceType: NodePort
+  nodePort: 30700
+
+##############################################################################
+# Splunk SOAR auto-remediation simulator. Receives webhooks from ITSI /
+# Observability detectors and "executes a playbook" (logs structured
+# JSON to stdout). Closes the demo's detection -> ticket -> action loop.
+# See helm/natwest-payments/templates/soar-simulator.yaml.
+##############################################################################
+soarSimulator:
+  enabled: true
+  image: "python:3.12-slim"
+  port: 8080
+  serviceType: NodePort
+  nodePort: 30701
+
+##############################################################################
+# Customer-facing status page (StatusPage.io / status.natwest.com style).
+# Reads incident state from the in-cluster ServiceNow simulator's
+# /api/now/v1/incidents endpoint on every page render.
+##############################################################################
+statusPage:
+  enabled: true
+  image: "python:3.12-slim"
+  port: 8080
+  serviceType: NodePort
+  nodePort: 30702
+
+networkPolicy:
+  enabled: true
+  # Splunk OTel Collector is deployed in this namespace (see scripts/02).
+  collectorNamespace: splunk-otel
+
+##############################################################################
+# Chaos Controller — presenter-only Chaos Dashboard (SPA /ops) backend.
+#
+# A tiny in-cluster Flask service that performs the kubectl-equivalent
+# mutations (env-var patches, scale-to-0, pod-delete) behind the SPA
+# Chaos Dashboard. Disabled by default. When enabled, the chart provisions:
+#
+#   * A dedicated ServiceAccount + namespace-scoped Role with the minimal
+#     verbs needed (deployments get/list/patch + deployments/scale,
+#     pods get/list/delete). No secrets verbs.
+#   * A Deployment that mounts a Secret containing the presenter token
+#     (shared bearer used by the SPA's X-Chaos-Token header).
+#   * A ClusterIP Service that the web-frontend nginx reverse-proxies at
+#     /chaos/api/* so the dashboard stays same-origin (no CORS, no new
+#     RUM trust list entries).
+#
+# Safety: every POST emits a `nwpay:chaos` HEC audit event in the same
+# shape that scripts/incident.sh produces, so the existing SIEM
+# correlation searches keep firing without modification.
+##############################################################################
+chaosController:
+  enabled: false
+  image:
+    repository: ""        # filled at deploy time by scripts/05c-chaos-controller.sh
+    tag: "0.1.0"
+    pullPolicy: IfNotPresent
+  replicas: 1
+  # Required when enabled=true. Rendered into a dedicated Secret; the
+  # plaintext never appears in the pod spec. Set via --set on the helm
+  # CLI from scripts/05c-chaos-controller.sh, NEVER committed.
+  presenterToken: ""
+  # Splunk Enterprise HEC config for chaos audit events. Mirrors the
+  # `terraform output splunk_enterprise_hec_endpoint_public` /
+  # `splunk_enterprise_hec_token_scripts` values that scripts/incident.sh
+  # reads at runtime. Empty values disable HEC emission (the controller
+  # still works, audit events are dropped with a single warning log).
+  hec:
+    endpoint: ""           # https://<splunk-host>:8088/services/collector
+    token: ""              # HEC token allow-listed for nwpay_audit
+    index: "nwpay_audit"
+    insecure: "1"          # demo Splunk Enterprise uses self-signed certs
+  # Allow-list of deployments the kill-service scenario can target.
+  # Keep this short and reversible; the chaos-controller refuses any
+  # service not on this list.
+  killable_services:
+    - api-gateway
+    - fraud-detection-service
+    - payment-status-service
+    - sanctions-aml-service
+    - swift-network
+  resources:
+    requests:
+      cpu: "50m"
+      memory: "64Mi"
+    limits:
+      cpu: "250m"
+      memory: "256Mi"
+  service:
+    port: 8080
+
+##############################################################################
+# rum-user-simulator — Playwright-driven per-city browser sessions.
+#
+# Additive block (added 2026-07-10). ADD/REMOVE this whole section to fully
+# add/remove the feature — every downstream template is gated on
+# rumUserSimulator.enabled, so setting enabled=false is a complete removal.
+#
+# Origin: rum-user-simulator/ directory + templates/rum-user-simulator.yaml
+# Rollback: `--set rumUserSimulator.enabled=false` or delete this block.
+##############################################################################
+rumUserSimulator:
+  enabled: false
+  image:
+    # Filled at deploy time by scripts/01-build-push.sh (BUILD_RUM_USER_SIMULATOR=1)
+    # or via `helm upgrade --set rumUserSimulator.image.repository=<ecr-url>`.
+    # The image is built from rum-user-simulator/Dockerfile.
+    repository: ""
+    tag: "0.1.0"
+    pullPolicy: IfNotPresent
+  replicas: 1
+  # SPA + chaos-controller endpoints. Defaults resolve inside the cluster to
+  # the same-namespace ClusterIP services; override only if you're pointing
+  # the sim at a different environment.
+  spaUrl: ""       # default: http://web-frontend.<namespace>.svc.cluster.local
+  chaosUrl: ""     # default: http://chaos-controller.<namespace>.svc.cluster.local:<chaosController.service.port>
+  # Session cadence (start → start per city). 30 s gives a stable
+  # per-location conversion rate in DXA within ~2 min without saturating
+  # a single-pod Chromium.
+  cadenceSeconds: 30
+  # Chaos-controller poll cadence. Independent of session cadence so a
+  # slow chaos-controller can't stretch a session budget.
+  chaosPollSeconds: 5
+  # Per-session upper bound. If Playwright hasn't reached the success card
+  # / status line in this window we abandon and try again next tick.
+  sessionBudgetSeconds: 25
+  # Rage-click config for chaos-armed Madrid iterations. Trips Splunk RUM's
+  # frustrationSignals rage-click detector (7 clicks @ 150ms gap = 1.05s).
+  rageClickCount: 7
+  rageClickGapMs: 150
+  # Scenarios whose armed state trips chaos-mode for Madrid. Anything else
+  # armed at the same time is IGNORED (this list is authoritative).
+  madridChaosScenarios:
+    - madrid-payment-degradation
+    - madrid-network-degradation
+  cities:
+    madrid:
+      enabled: true
+      personaId: cust-es-001         # Sofía — country=ES → sanctions-aml chaos gate
+      # locationOverride: "madrid"   # Sofía already has location=madrid in personas.ts
+    london:
+      enabled: true
+      personaId: cust-uk-003         # Margaret — no location in personas.ts
+      # Note: Margaret intentionally has no location block in personas.ts,
+      # so RUM spans from London sessions carry no customer.location today.
+      # Set locationOverride below only if you also expose SplunkRum on
+      # window.SplunkRum in main.tsx (best-effort noop otherwise).
+      # locationOverride: "london"
+      # countryOverride: "GB"
+    frankfurt:
+      enabled: true
+      personaId: cust-de-001         # Klaus — location=frankfurt already wired
+  resources:
+    requests:
+      cpu: "150m"
+      memory: "384Mi"
+    limits:
+      cpu: "500m"
+      memory: "1Gi"

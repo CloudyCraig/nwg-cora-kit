@@ -1,0 +1,402 @@
+{{- if .Values.infrastructure.kafka.enabled }}
+{{- $port := .Values.infrastructure.kafka.port | default 9092 -}}
+{{- $controllerPort := .Values.infrastructure.kafka.controllerPort | default 9093 -}}
+{{- $jmxPort := .Values.infrastructure.kafka.jmx.port | default 5555 -}}
+{{- $exporterPort := .Values.infrastructure.kafka.jmx.exporterPort | default 5556 -}}
+---
+# Kafka - single-broker KRaft mode (no ZooKeeper). Uses the official
+# apache/kafka image which exposes configuration through KAFKA_* env vars
+# (mapped 1:1 to server.properties keys by /etc/kafka/docker/run). Topic
+# `payments.settled` is auto-created on first publish, but we also bootstrap
+# it via a Helm post-install Job so the broker edge shows up in the service
+# map immediately after deploy. Used to decouple payment-initiation-service
+# (producer) from settlement-service (consumer) and to demonstrate end-to-end
+# W3C-traceparent propagation across the broker via Kafka headers.
+#
+# Instrumentation:
+#   * The broker JVM is started with the upstream prometheus/jmx_exporter
+#     JAVA AGENT attached via KAFKA_OPTS. The agent exposes Prometheus
+#     metrics on :5556 directly from the broker process - no JMX/RMI
+#     listener is needed and no separate sidecar JVM is involved.
+#   * The agent jar is fetched once at pod start by an init container
+#     from Maven Central into an emptyDir, then mounted read-only into the
+#     broker. Init container is stateless so a pod restart re-downloads
+#     idempotently. (Bitnami stopped publishing the bitnami/jmx-exporter
+#     image, which is why we don't use the standalone HTTPServer pattern.)
+#   * Rules ConfigMap (kafka-jmx-exporter) encodes the SignalFx-schema
+#     metric names so the OTel collector's prometheus/infra receiver can
+#     scrape :5556 every 30s and they land in the Splunk Observability
+#     "Apache Kafka" navigator.
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kafka-jmx-exporter
+  namespace: {{ .Values.namespace }}
+  labels:
+    app.kubernetes.io/name: kafka
+    app.kubernetes.io/part-of: natwest-payments
+data:
+  config.yml: |
+    # JMX exporter Java agent config. Note: when running as a JAVA AGENT
+    # there is no `hostPort` field (the agent introspects the same JVM).
+    # See upstream JMX exporter configuration docs (Prometheus project).
+    lowercaseOutputName: true
+    lowercaseOutputLabelNames: true
+    # Rules below remap a curated subset of Kafka MBeans into Prometheus
+    # metric names that line up with the Splunk Observability "Apache Kafka"
+    # navigator (which reuses the SignalFx Smart Agent kafka collector
+    # naming convention). Anything not matched is dropped.
+    rules:
+      # Broker throughput - messages and bytes in/out per topic.
+      - pattern: kafka.server<type=BrokerTopicMetrics, name=(MessagesInPerSec|BytesInPerSec|BytesOutPerSec)><>(Count|OneMinuteRate)
+        name: kafka_server_brokertopicmetrics_$1_$2
+        type: GAUGE
+      # Replica manager - ISR shrinks/expands and under-replicated partitions.
+      - pattern: kafka.server<type=ReplicaManager, name=(UnderReplicatedPartitions|PartitionCount|LeaderCount|OfflineReplicaCount)><>Value
+        name: kafka_server_replicamanager_$1
+        type: GAUGE
+      - pattern: kafka.server<type=ReplicaManager, name=(IsrShrinksPerSec|IsrExpandsPerSec)><>(Count|OneMinuteRate)
+        name: kafka_server_replicamanager_$1_$2
+        type: GAUGE
+      # Request handler load and request latency by request type.
+      - pattern: kafka.server<type=KafkaRequestHandlerPool, name=RequestHandlerAvgIdlePercent><>(OneMinuteRate|MeanRate)
+        name: kafka_server_request_handler_avg_idle_percent_$1
+        type: GAUGE
+      - pattern: kafka.network<type=RequestMetrics, name=(RequestsPerSec|TotalTimeMs|RequestQueueTimeMs|LocalTimeMs|ResponseSendTimeMs), request=([^,>]+)><>(Count|OneMinuteRate|99thPercentile|999thPercentile|Mean|Max)
+        name: kafka_network_requestmetrics_$1_$3
+        labels:
+          request: "$2"
+        type: GAUGE
+      # Controller / leadership churn.
+      - pattern: kafka.controller<type=KafkaController, name=(ActiveControllerCount|OfflinePartitionsCount|GlobalPartitionCount)><>Value
+        name: kafka_controller_$1
+        type: GAUGE
+      - pattern: kafka.controller<type=ControllerStats, name=(LeaderElectionRateAndTimeMs|UncleanLeaderElectionsPerSec)><>(Count|OneMinuteRate|Mean)
+        name: kafka_controller_controllerstats_$1_$2
+        type: GAUGE
+      # JVM heap / GC for the broker process.
+      - pattern: java.lang<type=Memory><(\w+)Usage>(used|max|committed|init)
+        name: kafka_jvm_memory_$1_$2
+        type: GAUGE
+      - pattern: java.lang<type=GarbageCollector, name=(.+)><>(CollectionCount|CollectionTime)
+        name: kafka_jvm_gc_$2
+        labels:
+          collector: "$1"
+        type: COUNTER
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kafka
+  namespace: {{ .Values.namespace }}
+  labels:
+    app.kubernetes.io/name: kafka
+    app.kubernetes.io/component: messaging
+    app.kubernetes.io/part-of: natwest-payments
+    app.kubernetes.io/managed-by: Helm
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kafka
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: kafka
+        app.kubernetes.io/component: messaging
+        app.kubernetes.io/part-of: natwest-payments
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: {{ $exporterPort | quote }}
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: {{ .Values.serviceAccount.name }}
+      automountServiceAccountToken: false
+      # apache/kafka:3.7.0 ships with appuser uid=1000 and writes generated
+      # server.properties to /etc/kafka/docker, log segments to
+      # /tmp/kraft-combined-logs, and metadata to /var/lib/kafka/data. fsGroup
+      # ensures the emptyDir mounts are writable by appuser.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        # Fetch the JMX exporter Java-agent jar from Maven Central into an
+        # emptyDir that the broker container then mounts read-only. Doing
+        # this from an init container keeps the broker image vanilla
+        # (apache/kafka:3.7.0 unmodified) and lets us pin / change the
+        # agent version via values.yaml. The download is small (~440 KB)
+        # so the cold-start cost is negligible.
+        - name: fetch-jmx-agent
+          image: {{ .Values.infrastructure.kafka.jmx.agentFetchImage | quote }}
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              JAR=/opt/jmx/jmx_prometheus_javaagent.jar
+              if [ ! -s "$JAR" ]; then
+                echo "downloading jmx_prometheus_javaagent {{ .Values.infrastructure.kafka.jmx.agentVersion }}"
+                curl -fsSL -o "$JAR" \
+                  "https://repo1.maven.org/maven2/io/prometheus/jmx/jmx_prometheus_javaagent/{{ .Values.infrastructure.kafka.jmx.agentVersion }}/jmx_prometheus_javaagent-{{ .Values.infrastructure.kafka.jmx.agentVersion }}.jar"
+              else
+                echo "jar already present, skipping download"
+              fi
+              ls -la "$JAR"
+          resources:
+            requests:
+              cpu: "10m"
+              memory: "32Mi"
+            limits:
+              cpu: "200m"
+              memory: "128Mi"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: jmx-agent
+              mountPath: /opt/jmx
+            - name: tmp
+              mountPath: /tmp
+      containers:
+        - name: kafka
+          image: {{ .Values.infrastructure.kafka.image | quote }}
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: kafka
+              containerPort: {{ $port }}
+              protocol: TCP
+            - name: controller
+              containerPort: {{ $controllerPort }}
+              protocol: TCP
+            - name: metrics
+              containerPort: {{ $exporterPort }}
+              protocol: TCP
+          env:
+            # KRaft mode (single-node combined controller+broker).
+            - name: KAFKA_NODE_ID
+              value: "0"
+            - name: KAFKA_PROCESS_ROLES
+              value: "controller,broker"
+            - name: KAFKA_CONTROLLER_QUORUM_VOTERS
+              value: "0@127.0.0.1:{{ $controllerPort }}"
+            - name: KAFKA_LISTENERS
+              value: "PLAINTEXT://:{{ $port }},CONTROLLER://:{{ $controllerPort }}"
+            - name: KAFKA_ADVERTISED_LISTENERS
+              value: "PLAINTEXT://kafka.{{ .Values.namespace }}.svc.cluster.local:{{ $port }}"
+            - name: KAFKA_LISTENER_SECURITY_PROTOCOL_MAP
+              value: "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT"
+            - name: KAFKA_CONTROLLER_LISTENER_NAMES
+              value: "CONTROLLER"
+            - name: KAFKA_INTER_BROKER_LISTENER_NAME
+              value: "PLAINTEXT"
+            - name: KAFKA_LOG_DIRS
+              value: "/var/lib/kafka/data"
+            # Demo defaults: auto-create topics on first publish, single replica.
+            - name: KAFKA_AUTO_CREATE_TOPICS_ENABLE
+              value: "true"
+            - name: KAFKA_NUM_PARTITIONS
+              value: "3"
+            - name: KAFKA_DEFAULT_REPLICATION_FACTOR
+              value: "1"
+            - name: KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR
+              value: "1"
+            - name: KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR
+              value: "1"
+            - name: KAFKA_TRANSACTION_STATE_LOG_MIN_ISR
+              value: "1"
+            - name: KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS
+              value: "0"
+            - name: CLUSTER_ID
+              value: {{ .Values.infrastructure.kafka.clusterId | default "natwest-payments-demo-cluster" | quote }}
+            # Attach the prometheus/jmx_exporter Java agent to the broker
+            # JVM. The agent listens on :5556 inside the broker process
+            # itself - no RMI listener, no separate JVM. apache/kafka's
+            # entrypoint forwards $KAFKA_OPTS into the Java command line.
+            - name: KAFKA_OPTS
+              value: "-javaagent:/opt/jmx/jmx_prometheus_javaagent.jar={{ $exporterPort }}:/etc/jmx-exporter/config.yml"
+            # Broker stdout logging: WARN at root, INFO for controller so
+            # KRaft leadership churn is visible during kafka-outage chaos.
+            - name: KAFKA_LOG4J_ROOT_LOGLEVEL
+              value: "WARN"
+            - name: KAFKA_LOG4J_LOGGERS
+              value: "kafka.controller=INFO,state.change.logger=INFO,kafka.network.RequestChannel$=WARN"
+          livenessProbe:
+            tcpSocket:
+              port: kafka
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 5
+          readinessProbe:
+            tcpSocket:
+              port: kafka
+            initialDelaySeconds: 20
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 24
+          resources:
+            requests:
+              cpu: "200m"
+              memory: "768Mi"
+            # Kafka broker JVM heap (default 1G) plus G1GC overhead plus
+            # the jmx_prometheus_javaagent regularly pushed the broker
+            # close to 1Gi RSS. Under sustained chaos scenarios (kafka-
+            # outage replay, payment-meltdown burst) the heap occasionally
+            # spiked above 1Gi and the broker was OOMKilled (137), which
+            # then orphaned the settlement/reconciliation/reporting chain
+            # on the Splunk Observability Service Map until producers and
+            # consumers reconnected. 2Gi gives the JVM enough headroom
+            # for snapshot generation + JMX + page cache without inviting
+            # the OOM killer.
+            limits:
+              cpu: "1500m"
+              memory: "2Gi"
+          securityContext:
+            allowPrivilegeEscalation: false
+            # apache/kafka's docker entrypoint writes the generated
+            # server.properties back into /etc/kafka/docker at startup. That
+            # path is part of the image rootfs (it ships pre-populated with
+            # `run`, `configure`, and the default property templates), so we
+            # can't overlay it with an emptyDir without losing those scripts.
+            # Keep readOnlyRootFilesystem off and rely on dropped capabilities
+            # + non-root user for hardening instead.
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/kafka/data
+            - name: tmp
+              mountPath: /tmp
+            - name: jmx-agent
+              mountPath: /opt/jmx
+              readOnly: true
+            - name: jmx-exporter-config
+              mountPath: /etc/jmx-exporter
+              readOnly: true
+      volumes:
+        - name: data
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+        - name: jmx-agent
+          emptyDir: {}
+        - name: jmx-exporter-config
+          configMap:
+            name: kafka-jmx-exporter
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kafka
+  namespace: {{ .Values.namespace }}
+  labels:
+    app.kubernetes.io/name: kafka
+    app.kubernetes.io/component: messaging
+    app.kubernetes.io/part-of: natwest-payments
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: kafka
+  ports:
+    - name: kafka
+      port: {{ $port }}
+      targetPort: kafka
+      protocol: TCP
+    - name: metrics
+      port: {{ $exporterPort }}
+      targetPort: metrics
+      protocol: TCP
+---
+# Topic creation Job - waits for the broker to be ready, then runs
+# `kafka-topics.sh --create --if-not-exists` for every topic in
+# infrastructure.kafka.topics. Keeps the Kafka edge of the service map
+# rendered immediately after deploy rather than only after the first publish.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: kafka-topic-bootstrap
+  namespace: {{ .Values.namespace }}
+  labels:
+    app.kubernetes.io/name: kafka-topic-bootstrap
+    app.kubernetes.io/part-of: natwest-payments
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "0"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 6
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: kafka-topic-bootstrap
+        app.kubernetes.io/part-of: natwest-payments
+    spec:
+      restartPolicy: OnFailure
+      serviceAccountName: {{ .Values.serviceAccount.name }}
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: bootstrap
+          image: {{ .Values.infrastructure.kafka.image | quote }}
+          imagePullPolicy: IfNotPresent
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -eu
+              BROKER="kafka.{{ .Values.namespace }}.svc.cluster.local:{{ $port }}"
+              echo "waiting for kafka broker at ${BROKER}..."
+              for i in $(seq 1 60); do
+                if /opt/kafka/bin/kafka-broker-api-versions.sh \
+                     --bootstrap-server "${BROKER}" >/dev/null 2>&1; then
+                  echo "broker is up"
+                  break
+                fi
+                sleep 5
+              done
+              {{- range $topic := .Values.infrastructure.kafka.topics }}
+              echo "ensuring topic {{ $topic }}"
+              /opt/kafka/bin/kafka-topics.sh \
+                --bootstrap-server "${BROKER}" \
+                --create --if-not-exists \
+                --topic {{ $topic | quote }} \
+                --partitions 3 \
+                --replication-factor 1
+              {{- end }}
+              echo "topic bootstrap complete"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "128Mi"
+            limits:
+              cpu: "300m"
+              memory: "256Mi"
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+{{- end }}

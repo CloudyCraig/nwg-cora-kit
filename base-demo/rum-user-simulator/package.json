@@ -1,0 +1,17 @@
+{
+  "name": "rum-user-simulator",
+  "version": "0.1.4",
+  "private": true,
+  "description": "Playwright-driven per-city browser sessions that produce steady Splunk RUM traffic against the NatWest Payments SPA and rage-click on chaos-armed Madrid.",
+  "type": "module",
+  "main": "run.js",
+  "scripts": {
+    "start": "node run.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "playwright": "1.51.0"
+  }
+}

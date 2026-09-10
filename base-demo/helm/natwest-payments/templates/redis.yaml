@@ -1,0 +1,181 @@
+{{- if .Values.infrastructure.redis.enabled }}
+{{- $port := .Values.infrastructure.redis.port | default 6379 -}}
+{{- $exporterPort := .Values.infrastructure.redis.exporter.port | default 9121 -}}
+---
+# Redis - in-memory cache used by sanctions-aml-service (sanctions/PEP list cache)
+# and fraud-detection-service (feature store). One replica is enough for the
+# demo; the OTel Python redis-py auto-instrumentation produces `db.system=redis`
+# spans that Splunk APM renders as a service node, with one
+# inbound edge per service that uses it.
+#
+# Sidecar `redis-exporter` (oliver006/redis_exporter) connects to the local
+# redis on 127.0.0.1:6379 and exposes Prometheus-format metrics on :9121
+# (redis_evicted_keys_total, redis_memory_used_bytes, redis_connected_clients,
+# etc.). The Splunk OTel Collector's prometheus/infra receiver scrapes the
+# pod via the prometheus.io/* annotations + the PodMonitor-style discovery
+# bundled with the chart. The annotations are also enough for any other
+# Prometheus-aware tool the customer might run alongside.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  namespace: {{ .Values.namespace }}
+  labels:
+    app.kubernetes.io/name: redis
+    app.kubernetes.io/component: cache
+    app.kubernetes.io/part-of: natwest-payments
+    app.kubernetes.io/managed-by: Helm
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: redis
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: redis
+        app.kubernetes.io/component: cache
+        app.kubernetes.io/part-of: natwest-payments
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: {{ $exporterPort | quote }}
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: {{ .Values.serviceAccount.name }}
+      automountServiceAccountToken: false
+      # Official redis:7.4-alpine runs as user `redis` (uid 999, gid 999).
+      # fsGroup matches the data emptyDir to that gid so redis can write its
+      # in-memory snapshot dir even though we've disabled persistence.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: redis
+          image: {{ .Values.infrastructure.redis.image | quote }}
+          imagePullPolicy: IfNotPresent
+          # Disable persistence + protected-mode (single-tenant in-cluster) and
+          # bind to all interfaces for the in-namespace ClusterIP service.
+          command:
+            - "redis-server"
+            - "--save"
+            - ""
+            - "--appendonly"
+            - "no"
+            - "--protected-mode"
+            - "no"
+            - "--bind"
+            - "0.0.0.0"
+            - "--maxmemory"
+            - {{ .Values.infrastructure.redis.maxmemory | default "128mb" | quote }}
+            - "--maxmemory-policy"
+            - "allkeys-lru"
+            # notice: connection and eviction events on stdout for the
+            # splunk-otel filelog receiver (sourcetype=redis).
+            - "--loglevel"
+            - "notice"
+          ports:
+            - name: redis
+              containerPort: {{ $port }}
+              protocol: TCP
+          livenessProbe:
+            tcpSocket:
+              port: redis
+            initialDelaySeconds: 5
+            periodSeconds: 15
+            timeoutSeconds: 3
+          readinessProbe:
+            exec:
+              command: ["redis-cli", "ping"]
+            initialDelaySeconds: 2
+            periodSeconds: 5
+            timeoutSeconds: 3
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "96Mi"
+            limits:
+              cpu: "300m"
+              memory: "256Mi"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: tmp
+              mountPath: /tmp
+        # ---------------- redis_exporter sidecar ---------------------------
+        # Connects to the redis container on the pod-local loopback. It runs
+        # as the same uid/gid as redis (the Pod-level securityContext applies)
+        # so it inherits a non-root, hardened context. No extra capabilities
+        # required. The default upstream image listens on :9121 and exits
+        # cleanly on SIGTERM, which is fine for our Recreate strategy.
+        - name: redis-exporter
+          image: {{ .Values.infrastructure.redis.exporter.image | quote }}
+          imagePullPolicy: IfNotPresent
+          args:
+            - "--redis.addr=redis://127.0.0.1:{{ $port }}"
+            - "--web.listen-address=:{{ $exporterPort }}"
+          ports:
+            - name: metrics
+              containerPort: {{ $exporterPort }}
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: metrics
+            initialDelaySeconds: 5
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: metrics
+            initialDelaySeconds: 2
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: "10m"
+              memory: "32Mi"
+            limits:
+              cpu: "100m"
+              memory: "96Mi"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+      volumes:
+        - name: data
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  namespace: {{ .Values.namespace }}
+  labels:
+    app.kubernetes.io/name: redis
+    app.kubernetes.io/component: cache
+    app.kubernetes.io/part-of: natwest-payments
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: redis
+  ports:
+    - name: redis
+      port: {{ $port }}
+      targetPort: redis
+      protocol: TCP
+    - name: metrics
+      port: {{ $exporterPort }}
+      targetPort: metrics
+      protocol: TCP
+{{- end }}

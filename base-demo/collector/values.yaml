@@ -1,0 +1,757 @@
+# Values for the official Splunk OpenTelemetry Collector Helm chart:
+#   Splunk OTel Collector Helm chart (install via `helm repo add` using Splunk’s chart index).
+#
+# The access token is injected at install time from a Kubernetes Secret
+# (see scripts/02-install-collector.sh). The realm is passed via --set.
+
+clusterName: natwest-payments-demo
+
+# Splunk Observability Cloud destination.
+#   - realm and accessToken are required by the chart schema. Realm is passed
+#     via --set at install time. accessToken is set to a sentinel here because
+#     the schema requires a non-empty string; the effective token comes from
+#     the existing Kubernetes Secret referenced in the top-level `secret:`
+#     block below (secret.create=false, secret.name=splunk-access-token).
+splunkObservability:
+  realm: ""
+  accessToken: "__from_k8s_secret__"
+  metricsEnabled: true
+  tracesEnabled: true
+  # NOTE on log shipping to Log Observer:
+  # The natural knob `splunkObservability.logsEnabled: true` is rejected
+  # by the chart 0.150.x JSON schema (added in a later chart release).
+  # Instead we toggle the underlying `splunk_hec/o11y` exporter's
+  # `log_data_enabled` flag directly via an exporter override under
+  # `agent.config.exporters` further down. This keeps profiling records
+  # working as before but ALSO enables actual application logs into the
+  # APM Service Map "Logs" panel.
+  # AlwaysOn Profiling: turns on the profiling-data pipeline in the agent
+  # (OTLP logs receiver -> Splunk Observability Cloud profiling endpoint).
+  # The Python services ship CPU+memory call stacks via SPLUNK_PROFILER_*
+  # env vars in helm/natwest-payments/templates/deployment.yaml.
+  profilingEnabled: true
+
+# Reference an existing Kubernetes Secret created by
+# scripts/02-install-collector.sh. The chart's containers read the token from
+# env vars sourced from this Secret (must contain key:
+# splunk_observability_access_token).
+secret:
+  create: false
+  name: splunk-access-token
+  validateSecret: false
+
+# Splunk Enterprise / Cloud Platform destination. Required so that Log Observer
+# Connect (LOC) in Splunk Observability can federate against a real Splunk
+# Platform stack and surface application logs in the APM trace -> log pivot.
+#
+# Wire-up (terraform/splunk_enterprise.tf provisions all of this):
+#   * endpoint -> private IP of the Splunk Enterprise EC2 node, port 8088 HEC.
+#     The OTel agent DaemonSet pods sit in the same default VPC so traffic
+#     stays on RFC1918. Output: `terraform output splunk_enterprise_hec_endpoint`.
+#   * token -> the pre-shared HEC token pinned by terraform (var
+#     splunk_enterprise_hec_token, default UUID below). Output:
+#     `terraform output -raw splunk_enterprise_hec_token`.
+#   * insecureSkipVerify=true is unavoidable for the default Splunk self-signed
+#     cert. For a permanent setup, replace with a CA-signed cert on Splunk
+#     ($SPLUNK_HOME/etc/auth/server.pem) and flip this to false.
+#   * index "main" matches the index allow-listed in
+#     /opt/splunk/etc/apps/splunk_httpinput/local/inputs.conf on the Splunk
+#     box (see cloud-init/splunk-enterprise.tftpl).
+#
+# After populating these values, helm upgrade the collector:
+#   helm upgrade --reuse-values splunk-otel-collector \
+#     splunk-otel-collector-chart/splunk-otel-collector \
+#     -n splunk-otel \
+#     --set splunkPlatform.endpoint="$(terraform -chdir=terraform output -raw splunk_enterprise_hec_endpoint)" \
+#     --set splunkPlatform.token="$(terraform -chdir=terraform output -raw splunk_enterprise_hec_token)" \
+#     --set splunkPlatform.insecureSkipVerify=true \
+#     --set splunkPlatform.index=main
+#
+# Splunk side, to complete the LOC integration:
+#   1. In Splunk Observability Cloud: Data Management -> Add Integration ->
+#      Splunk Platform -> follow the LOC wizard, pointing at the public IP
+#      output by `terraform output splunk_enterprise_web_url`.
+#   2. The OTel Collector ships JSON-formatted container logs to HEC index
+#      "main"; LOC then surfaces them under APM "Logs for this trace" using
+#      the trace_id/span_id fields the application already emits in
+#      structured-logs (see helm/natwest-payments/templates/deployment.yaml
+#      OTEL_PYTHON_LOG_CORRELATION=true).
+splunkPlatform:
+  endpoint: ""              # populate via --set at install time (see comment)
+  token: ""                 # populate via --set at install time
+  index: "main"             # logs index (events). Used by splunk_hec/platform_logs.
+  # OTel metrics need a metrics-type Splunk index. We reuse the
+  # ITSI-shipped `itsi_im_metrics` index so we don't have to create a new
+  # one in cloud-init. The HEC token allowlist is updated to match (see
+  # terraform/cloud-init/splunk-enterprise.tftpl).
+  metricsIndex: "itsi_im_metrics"
+  insecureSkipVerify: true  # default Splunk self-signed cert
+  logsEnabled: true
+  # Fan-out traces and metrics to Splunk Enterprise HEC alongside the
+  # Splunk Observability exporters. ITSI on the Splunk Enterprise box
+  # needs to be able to query the spans to populate KPI base searches
+  # (see itsi/service-tree.yaml). The chart wires up:
+  #   * splunk_hec/platform_traces  -> sourcetype "otel:traces"
+  #   * splunk_hec/platform_metrics -> sourcetype "otel:metrics"
+  # Trade-off: doubles HEC ingest volume vs. logs-only. Acceptable for
+  # the demo (peak ~30 ev/s of spans). Disable if HEC license becomes
+  # a bottleneck and use the o11y -> Splunk Platform connector instead.
+  tracesEnabled: true
+  metricsEnabled: true
+agent:
+  enabled: true
+  resources:
+    # Bumped from 320Mi/640Mi after a Splunk Enterprise disk-full incident
+    # caused HEC writes to back up: the agent's splunk_hec/platform_*
+    # sending queues filled (1000 items x 3 signals x 10 consumers), the
+    # memorylimiter tripped at the soft limit (480 MiB by default, =75% of
+    # 640Mi), and the agent began REFUSING incoming OTLP spans at the
+    # receiver. That starved the signalfx exporter of data, which in turn
+    # blanked the Splunk APM service map. Headroom matters here because
+    # the same memorylimiter behaviour silently drops APM data even when
+    # only the splunk_hec exporters are unhealthy. 768Mi/1Gi keeps the
+    # signalfx pipeline isolated from transient Splunk Enterprise outages.
+    requests:
+      cpu: 200m
+      memory: 768Mi
+    limits:
+      cpu: 600m
+      memory: 1024Mi
+  # Pull the postgres monitoring credentials from a k8s Secret in the
+  # splunk-otel namespace. scripts/00-provision.sh creates the secret with
+  # the same password it pushes into the natwest chart's
+  # `infrastructure.postgres.monitoringUser.password`. Without the secret
+  # the postgresql receiver logs "auth failed" every 30s but doesn't crash.
+  # The chart key is `extraEnvs` (plural, no Vars). Schema-validated.
+  extraEnvs:
+    - name: PG_EXPORTER_USER
+      valueFrom:
+        secretKeyRef:
+          name: postgres-monitoring
+          key: PG_EXPORTER_USER
+          optional: true
+    - name: PG_EXPORTER_PASSWORD
+      valueFrom:
+        secretKeyRef:
+          name: postgres-monitoring
+          key: PG_EXPORTER_PASSWORD
+          optional: true
+  config:
+    receivers:
+      # NOTE: chart 0.151.0 renamed `hostmetrics` to `host_metrics` (the
+      # NOTES.txt template hard-fails the helm upgrade if it spots the old
+      # spelling). Both keys are accepted by the underlying contrib
+      # receiver registry (see `valid values:` in `otelcol` config-error
+      # output), but the chart template only recognises the new name.
+      host_metrics:
+        collection_interval: 30s
+      # ---------------- Native infra receivers ----------------------------
+      # Each native receiver emits SignalFx-schema metric names (redis.*,
+      # postgresql.*, kafka.*) which auto-populate the matching Splunk
+      # Observability Infrastructure Monitoring navigator. The endpoints
+      # are k8s service DNS names so any node hosting an agent pod can
+      # reach them.
+      redis:
+        endpoint: "redis.natwest.svc.cluster.local:6379"
+        collection_interval: 30s
+        timeout: 5s
+      postgresql:
+        endpoint: "postgres.natwest.svc.cluster.local:5432"
+        # Read from the postgres-monitoring secret (see extraEnvs above).
+        # Both default to empty strings so the receiver gracefully no-ops if
+        # the secret is missing rather than crashing the collector.
+        username: "${env:PG_EXPORTER_USER}"
+        password: "${env:PG_EXPORTER_PASSWORD}"
+        databases:
+          - ledger
+        tls:
+          insecure: true
+        collection_interval: 30s
+      # ---------------- Postgres DBM-style log feed --------------------------
+      # Scheduled SQL queries that emit results as LOG records (one log per
+      # row) so Splunk Enterprise gets row-level Postgres observability that
+      # the native `postgresql` metrics receiver and `pg_stat_statements`
+      # histograms can't express:
+      #   * pg_stat_activity  -> "who is connected right now, what query are
+      #     they running, what wait_event_type / wait_event are they blocked
+      #     on, how long has the transaction been open" -- drives the
+      #     db-slow / postgres-outage chaos demo.
+      #   * pg_stat_statements -> top-N expensive statements with full SQL
+      #     text (60s cadence to keep HEC ingest bounded). Where the metrics
+      #     side gives you avg(mean_exec_time) by queryid as a number, this
+      #     side gives you the SQL text so you can sort, pattern-match, and
+      #     alert on plan regressions in SPL.
+      #   * pg_locks + pg_stat_activity self-join -> live lock-holder /
+      #     lock-waiter chains, with the blocking and blocked SQL text.
+      #
+      # This is the "lite DB Connect" path -- we deliberately did NOT install
+      # Splunk DB Connect on the Splunk Enterprise EC2 because it would have
+      # required Java 11+ on the AMI, an internal NLB to expose Postgres
+      # outside the cluster, and a new app install in the search head. The
+      # OTel sqlquery receiver keeps everything in-cluster, reuses the
+      # existing HEC pipeline (`splunk_hec/platform_logs`), and lands events
+      # in the same `nwpay_infra` index Terraform already provisioned.
+      #
+      # Credentials: re-uses the read-only `payments_exporter` PG role
+      # (granted `pg_monitor`, which is the umbrella that includes
+      # `pg_read_all_stats` -- everything below needs that and nothing more).
+      # The PG_EXPORTER_USER / PG_EXPORTER_PASSWORD env vars are populated
+      # from the postgres-monitoring Secret (see extraEnvs above).
+      #
+      # Routing: log records emitted here flow through the dedicated
+      # `logs/dbm` pipeline (NOT the main `logs` pipeline -- DBM telemetry
+      # must skip filter/logs and transform/audit_routing). The
+      # `transform/dbm_routing` processor pins
+      # com.splunk.index=nwpay_infra and com.splunk.sourcetype=postgres:dbm
+      # for the Splunk HEC exporter.
+      sqlquery/postgres:
+        driver: postgres
+        # libpq key=value DSN. sslmode=disable matches the rest of the
+        # in-cluster Postgres traffic (TLS terminates outside the cluster).
+        datasource: "host=postgres.natwest.svc.cluster.local port=5432 user=${env:PG_EXPORTER_USER} password=${env:PG_EXPORTER_PASSWORD} dbname=ledger sslmode=disable"
+        collection_interval: 30s
+        queries:
+          # Active sessions snapshot. Excludes idle and the collector's own
+          # backend (pg_backend_pid()) so the result set is bounded by the
+          # number of ledger-service JDBC connections actually doing work.
+          - sql: |
+              SELECT pid,
+                     usename,
+                     application_name,
+                     COALESCE(client_addr::text, 'unix') AS client_addr,
+                     COALESCE(state, 'unknown') AS state,
+                     COALESCE(wait_event_type, 'none') AS wait_event_type,
+                     COALESCE(wait_event, 'none') AS wait_event,
+                     COALESCE(EXTRACT(EPOCH FROM (now() - query_start))::int, 0) AS query_age_seconds,
+                     COALESCE(EXTRACT(EPOCH FROM (now() - xact_start))::int, 0) AS xact_age_seconds,
+                     query
+              FROM pg_stat_activity
+              WHERE state IS NOT NULL
+                AND state <> 'idle'
+                AND pid <> pg_backend_pid()
+            logs:
+              - body_column: query
+          # Top-N expensive statements by total accumulated exec time.
+          # The receiver schema does NOT support per-query
+          # `collection_interval` (only the receiver-level value), so this
+          # runs at the same 30s cadence as the other two queries. LIMIT 20
+          # keeps the per-tick row count bounded -- at most 40 events/min
+          # from this query alone. The top-N changes slowly in practice
+          # (over hours not seconds), so consecutive snapshots have high
+          # overlap; if HEC ingest becomes a concern, split this query into
+          # its OWN `sqlquery/postgres_statements` receiver instance with
+          # `collection_interval: 120s`.
+          - sql: |
+              SELECT queryid::text AS queryid,
+                     calls,
+                     total_exec_time::bigint AS total_exec_ms,
+                     mean_exec_time::int AS mean_exec_ms,
+                     rows,
+                     query
+              FROM pg_stat_statements
+              ORDER BY total_exec_time DESC
+              LIMIT 20
+            logs:
+              - body_column: query
+          # Lock-holder / lock-waiter chains. The self-join on pg_locks
+          # via transactionid is the standard pattern for finding which
+          # session is blocking which. Returns 0 rows when no contention,
+          # which costs only the SQL roundtrip every 30s.
+          - sql: |
+              SELECT bl.pid AS blocked_pid,
+                     ka.query AS blocking_query,
+                     kl.pid AS blocking_pid,
+                     a.query AS blocked_query,
+                     COALESCE(a.application_name, 'unknown') AS blocked_app
+              FROM pg_locks bl
+              JOIN pg_stat_activity a ON a.pid = bl.pid
+              JOIN pg_locks kl ON kl.transactionid = bl.transactionid AND kl.pid <> bl.pid
+              JOIN pg_stat_activity ka ON ka.pid = kl.pid
+              WHERE NOT bl.granted
+            logs:
+              - body_column: blocked_query
+      kafkametrics:
+        brokers:
+          - "kafka.natwest.svc.cluster.local:9092"
+        protocol_version: "2.0.0"
+        scrapers:
+          - brokers
+          - topics
+          - consumers
+        collection_interval: 30s
+      # ---------------- Prometheus scrape of exporter sidecars ------------
+      # Sidecars (redis_exporter, postgres_exporter, jmx_exporter) emit a
+      # superset of the metrics surfaced by the native receivers above, in
+      # particular the SignalFx-curated kafka.server.* and pg_stat_statements
+      # rollups. We keep both sources because (a) the native kafkametrics
+      # receiver doesn't cover JVM heap or per-request latency MBeans, and
+      # (b) postgres_exporter exposes pg_stat_statements which the native
+      # postgresql receiver doesn't read.
+      prometheus/infra:
+        config:
+          scrape_configs:
+            # NOTE on labels: we deliberately do NOT set `service_name`
+            # here. In the OTel -> SignalFx translation `service_name` is
+            # promoted to `service.name`, which would create a real APM
+            # service entity called "redis" / "postgres" / "kafka". When
+            # such an entity exists, Splunk APM no longer renders the
+            # trace-inferred infrastructure node with its branded icon
+            # (Postgres elephant, Redis cube, Kafka swirl) - it falls back
+            # to a generic service circle. The trace side already sets
+            # peer.service + db.system / messaging.system, so APM has all
+            # it needs to draw the proper icon as long as we don't shadow
+            # those names from the metrics side. We use `infra_component`
+            # instead, which the ITSI L4 KPI base searches do not depend
+            # on (those filter by metric_name, see itsi/service-tree.yaml).
+            - job_name: redis-exporter
+              scrape_interval: 30s
+              metrics_path: /metrics
+              static_configs:
+                - targets:
+                    - "redis.natwest.svc.cluster.local:9121"
+                  labels:
+                    infra_component: redis
+                    k8s_namespace: natwest
+            - job_name: postgres-exporter
+              scrape_interval: 30s
+              metrics_path: /metrics
+              static_configs:
+                - targets:
+                    - "postgres.natwest.svc.cluster.local:9187"
+                  labels:
+                    infra_component: postgres
+                    k8s_namespace: natwest
+            - job_name: kafka-jmx-exporter
+              scrape_interval: 30s
+              metrics_path: /metrics
+              static_configs:
+                - targets:
+                    - "kafka.natwest.svc.cluster.local:5556"
+                  labels:
+                    infra_component: kafka
+                    k8s_namespace: natwest
+    exporters:
+      # Pin the index + sourcetype on the chart's auto-generated
+      # `splunk_hec/platform_traces` and `splunk_hec/platform_metrics`
+      # exporters. The chart leaves both fields empty when only the
+      # top-level splunkPlatform.endpoint/token are passed at install
+      # time, which causes Splunk Enterprise to fall back to the HEC
+      # token's default destination -- on this stack that is
+      # `index=main sourcetype=httpevent`, which:
+      #   * blocks the `index=itsi_im_metrics` ingest the ITSI L4
+      #     KPIs depend on (the metrics endpoint accepts events but
+      #     they never land as a metric),
+      #   * forces the ITSI APM-driven KPI base searches in
+      #     itsi/service-tree.yaml to pattern-match on `httpevent`
+      #     instead of the canonical `otel:traces`/`otel:metrics`.
+      # Pinning here is also chart-version safe: the older 0.150.x
+      # schema rejects splunkPlatform.{traces,metrics}{Index,Sourcetype}
+      # at validation time, so this exporter-level override is the
+      # supported escape hatch.
+      # Trace spans land in their OWN index, not `main`. Two reasons:
+      #   1. Splunk Observability Cloud's Log Observer Connect (LOC)
+      #      federates logs from `index=main`. With trace spans in the
+      #      same index, the LOC UI categorises every span event as an
+      #      "unknown log type" (sourcetype=otel:traces has no log-parsing
+      #      profile) and overwhelms the actual application log entries
+      #      ~52% of the volume in `index=main` was trace spans).
+      #   2. Separating spans from logs makes per-signal retention,
+      #      bucket sizing, and ITSI base-search correctness independent.
+      #      Spans are high-cardinality / short-lived (3-day frozen window
+      #      configured on the index), logs are 90-day demo retention.
+      #
+      # The HEC token's `indexes` allow-list MUST include `otel_traces`
+      # (set on the splunk_httpinput `otel-collector` token in the
+      # cloud-init bootstrap; for an existing box update via REST):
+      #   curl -u admin:<pw> -X POST \\
+      #     "https://<host>:8089/servicesNS/nobody/splunk_httpinput/data/inputs/http/otel-collector" \\
+      #     -d "index=main" \\
+      #     -d "indexes=main,_internal,itsi_im_metrics,otel_traces"
+      #
+      # ITSI service-tree.yaml + glass-table panels read from the new
+      # index too -- search for `index=otel_traces sourcetype="otel:traces"`.
+      splunk_hec/platform_traces:
+        index: otel_traces
+        sourcetype: otel:traces
+      splunk_hec/platform_metrics:
+        index: itsi_im_metrics
+        sourcetype: otel:metrics
+      # Pin the sourcetype on container logs so they land canonically in
+      # Splunk Enterprise as `kube:container:natwest`. Without this, the
+      # chart leaves sourcetype empty and the HEC token defaults logs into
+      # `sourcetype=httpevent`, which makes ITSI / log-driven correlation
+      # searches harder to write and breaks props.conf field extractions
+      # that key off the canonical sourcetype.
+      splunk_hec/platform_logs:
+        index: main
+        sourcetype: kube:container:natwest
+      # IMPORTANT: leave `log_data_enabled` at the chart's default
+      # (false). We previously flipped it to true here in an attempt to
+      # drive the APM Service Map "Logs" panel, but the chart-derived
+      # endpoint `https://ingest.<realm>.observability.splunkcloud.com/v1/log`
+      # (and its `ingest.<realm>.signalfx.com/v1/log` alias) returns
+      # HTTP 404 for this org because the trial subscription does not
+      # include the standalone Splunk Observability Log Observer
+      # product (see /v2/organization features list - no `logs` /
+      # `logObserver` entitlement). Enabling it caused the agent to
+      # drop ~320k log records via `enqueue_failed_log_records`
+      # within minutes and spammed the agent log with retry storms.
+      #
+      # The supported architecture for this stack is Log Observer
+      # Connect (LOC) instead: ship logs only to Splunk Enterprise via
+      # `splunk_hec/platform_logs` (already wired below + verified at
+      # ~340k records), then federate Splunk Observability APM to that
+      # Splunk Platform instance via Data Management -> Splunk Platform
+      # in the o11y UI. Once the LOC integration points at our
+      # Splunk Enterprise FQDN (terraform output `splunk_enterprise_web_url`,
+      # mgmt port 8089), the APM Service Map "Logs" tab populates
+      # automatically using the trace_id field that the Splunk Python
+      # distro stamps on every log record (see
+      # OTEL_PYTHON_LOG_CORRELATION env var in
+      # helm/natwest-payments/templates/deployment.yaml).
+      #
+      # AlwaysOn Profiling is unaffected: profiling records use a
+      # different Splunk Observability endpoint that IS available in
+      # the trial.
+      splunk_hec/o11y:
+        log_data_enabled: false
+        profiling_data_enabled: true
+    processors:
+      # Stamp every infra-metric resource with the shared service.namespace
+      # / deployment.environment / k8s.cluster.name attributes the Python
+      # services already advertise. We deliberately DO NOT set service.name
+      # on these resources: see the comment in prometheus/infra above for
+      # why - claiming service.name=redis|postgres|kafka would shadow the
+      # trace-inferred infrastructure nodes and strip their branded APM
+      # icons. The infra_component label preserves the dimensional split
+      # for IM dashboards without polluting the APM service inventory.
+      resource/infra:
+        attributes:
+          - key: service.namespace
+            value: natwest-payments
+            action: upsert
+          - key: deployment.environment
+            value: demo
+            action: upsert
+          - key: k8s.cluster.name
+            value: natwest-payments-demo
+            action: upsert
+
+      # Per-container splunk.com/index + sourcetype routing.
+      #
+      # The chart's built-in `k8s_attributes` processor only honors
+      # POD-level `splunk.com/index` and `splunk.com/sourcetype`
+      # annotations -- the per-container variants
+      # `splunk.com/index.<container_name>` and
+      # `splunk.com/sourcetype.<container_name>` (e.g.
+      # `splunk.com/index.audit-tail`) are silently ignored. This is a
+      # well-known limitation of the upstream splunk-otel-collector
+      # chart's annotation-extraction config (see comment block on
+      # `k8s_attributes` extract.annotations -- only `splunk.com/index`
+      # and `splunk.com/sourcetype` are wired through k8s_attributes
+      # tag_name into `com.splunk.index` / `com.splunk.sourcetype`).
+      #
+      # This OTTL transform fills the gap for the api-gateway audit-tail
+      # sidecar: any log record whose `k8s.container.name` resource
+      # attribute equals `audit-tail` is routed to `nwpay_audit` with
+      # sourcetype `nwpay:payment_audit` (or `nwpay:auth` for SPA auth
+      # beacon events). The mapping is hard-coded against the container
+      # name rather than reading the annotation, because OTTL does not
+      # support dynamic key construction (e.g. `attributes["com.splunk.
+      # index." + container_name]`) -- so encoding it directly here is
+      # both simpler and equivalent in semantics.
+      #
+      # Without this routing, audit-tail stdout lands in
+      # `index=main sourcetype=kube:container:audit-tail`, which makes
+      # the L1 KPI base searches in itsi/service-tree.yaml
+      # (kbs_business_outcomes / kbs_decline_rate_audit /
+      # kbs_auth_failure_rate) point at a non-canonical location and
+      # mixes audit data into `main`.
+      #
+      # The transform sits AFTER `resource/logs` (which is where the
+      # chart's pod-level sourcetype copy happens) so our explicit
+      # override always wins.
+      transform/audit_routing:
+        log_statements:
+          - context: log
+            conditions:
+              - resource.attributes["k8s.container.name"] == "audit-tail"
+            statements:
+              - set(resource.attributes["com.splunk.index"], "nwpay_audit")
+              - set(resource.attributes["com.splunk.sourcetype"], "nwpay:payment_audit")
+              - set(resource.attributes["com.splunk.sourcetype"], "nwpay:auth") where IsString(body) and IsMatch(body, "\"event_type\":\"auth\"")
+
+      # Per-container index/sourcetype routing for the in-cluster infrastructure
+      # workloads (Postgres, Redis, Kafka, plus their Prometheus exporter
+      # sidecars). All of these previously landed in `index=main` with
+      # auto-derived sourcetype `kube:container:postgres` / `redis` / etc.
+      # because no pod-level `splunk.com/index` annotation was set. Terraform
+      # has provisioned the `nwpay_infra` index for exactly this purpose -- we
+      # just had to wire the routing.
+      #
+      # Why a transform instead of pod annotations: the chart only honors the
+      # POD-level `splunk.com/index` and `splunk.com/sourcetype` annotations,
+      # and the Postgres and Redis pods each have two containers (the database
+      # itself and its prometheus exporter sidecar) that need DIFFERENT
+      # sourcetypes. Pod-level annotations can't express that split, so we
+      # encode the container-name -> {index, sourcetype} mapping directly here.
+      # Same OTTL limitation (no dynamic key construction) and same
+      # rationale as transform/audit_routing above.
+      #
+      # The mapping kept narrow on purpose: only canonical infra containers.
+      # If we add more infra components later (e.g. opensearch, mongo), add a
+      # stanza per container name here rather than introducing a new
+      # transform processor.
+      #
+      # Sourcetype choices align with Splunk Enterprise's bundled props.conf
+      # parsers where they exist (`postgresql`, `redis`, `kafka`). The two
+      # exporter sidecars share `prom:exporter` so a single
+      # `sourcetype=prom:exporter` search returns all Prometheus-format
+      # text-line metrics across the demo.
+      #
+      # This transform is INSERTED into the main `logs` pipeline AFTER
+      # `transform/audit_routing` so the audit-tail special-case wins for
+      # api-gateway audit events, and AFTER the chart's default `resource/logs`
+      # step so our explicit overrides take precedence over any pod-level
+      # annotation copy.
+      transform/infra_routing:
+        log_statements:
+          - context: log
+            conditions:
+              - resource.attributes["k8s.container.name"] == "postgres"
+            statements:
+              - set(resource.attributes["com.splunk.index"], "nwpay_infra")
+              - set(resource.attributes["com.splunk.sourcetype"], "postgresql")
+              - set(resource.attributes["service.name"], "postgres")
+          - context: log
+            conditions:
+              - resource.attributes["k8s.container.name"] == "postgres-exporter"
+            statements:
+              - set(resource.attributes["com.splunk.index"], "nwpay_infra")
+              - set(resource.attributes["com.splunk.sourcetype"], "prom:exporter")
+          - context: log
+            conditions:
+              - resource.attributes["k8s.container.name"] == "redis"
+            statements:
+              - set(resource.attributes["com.splunk.index"], "nwpay_infra")
+              - set(resource.attributes["com.splunk.sourcetype"], "redis")
+              - set(resource.attributes["service.name"], "redis")
+          - context: log
+            conditions:
+              - resource.attributes["k8s.container.name"] == "redis-exporter"
+            statements:
+              - set(resource.attributes["com.splunk.index"], "nwpay_infra")
+              - set(resource.attributes["com.splunk.sourcetype"], "prom:exporter")
+          - context: log
+            conditions:
+              - resource.attributes["k8s.container.name"] == "kafka"
+            statements:
+              - set(resource.attributes["com.splunk.index"], "nwpay_infra")
+              - set(resource.attributes["com.splunk.sourcetype"], "kafka")
+              - set(resource.attributes["service.name"], "kafka")
+
+      # Pin index + sourcetype for the sqlquery/postgres receiver feed.
+      # Runs only in the dedicated `logs/dbm` pipeline below, so the
+      # statements can be unconditional -- every record reaching this
+      # processor is from sqlquery/postgres by construction.
+      # `context: log` + explicit `resource.attributes[...]` matches the
+      # spelling enforced by OTTL v0.153 (the parser warns and auto-
+      # rewrites the bare-attribute form). service.name=postgres makes
+      # the events groupable alongside the postgresql metric receivers
+      # in Splunk Observability if we ever decide to LOC-federate this
+      # sourcetype as well.
+      transform/dbm_routing:
+        log_statements:
+          - context: log
+            statements:
+              - set(resource.attributes["com.splunk.index"], "nwpay_infra")
+              - set(resource.attributes["com.splunk.sourcetype"], "postgres:dbm")
+              - set(resource.attributes["service.name"], "postgres")
+
+      # NOTE on log volume reduction:
+      #   Earlier iterations of this file added an in-collector
+      #   `probabilistic_sampler/halve_logs` and then a `filter/halve_logs`
+      #   OTTL filter to drop ~50% of records. Both broke:
+      #   * `probabilistic_sampler` v0.150 fails-closed on log records
+      #     without W3C TraceID context (filelog has none). It dropped
+      #     ~100% of `kube:container:*` traffic instead of 50%.
+      #   * `filter` with OTTL has no arithmetic operators (`%`, `-`)
+      #     and no `Hash()` builtin in v0.150, so we cannot construct a
+      #     deterministic 50/50 split from `Len(body)`, timestamps, or
+      #     trace_id without arithmetic.
+      #   Volume halving has been moved to the Splunk Enterprise indexer
+      #   tier via `props.conf` + `transforms.conf` (a `TRANSFORMS-halve`
+      #   stanza routes ~50% of `kube:container:service` events to
+      #   nullQueue based on the trace_id last hex digit). See
+      #   scripts/lib/install_letsencrypt_hec.sh and the
+      #   `halve_natwest_logs` transform deployed via SSH on the Splunk
+      #   Enterprise box.
+      #   This file therefore no longer adds any log filter / sampler.
+    service:
+      pipelines:
+        # Dedicated pipeline so adding/removing infra receivers doesn't
+        # accidentally widen the regular `metrics` pipeline. Exporters:
+        #   * signalfx                   -> Splunk Observability metrics
+        #   * splunk_hec/platform_metrics -> Splunk Enterprise HEC, sourcetype
+        #                                   "otel:metrics", index=main, drives
+        #                                   the ITSI L4 KPI base searches.
+        #
+        # The HEC exporter is auto-created by the chart when
+        # `splunkPlatform.endpoint` + `splunkPlatform.token` are passed at
+        # install time (scripts/02-install-collector.sh sources both from
+        # terraform outputs splunk_enterprise_hec_endpoint and
+        # splunk_enterprise_hec_token). If those outputs go missing the chart
+        # validation will fail with "references exporter ... is not
+        # configured" -- re-run `terraform apply` to register them.
+        metrics/infra:
+          receivers:
+            - redis
+            - postgresql
+            - kafkametrics
+            - prometheus/infra
+          processors:
+            - memory_limiter
+            - resource/infra
+            - batch
+          exporters:
+            - signalfx
+            - splunk_hec/platform_metrics
+
+        # Logs pipeline override: insert `transform/audit_routing` at
+        # the END of the chain so per-container index/sourcetype
+        # routing for the api-gateway audit-tail sidecar takes effect
+        # AFTER the chart's default `resource/logs` step (which copies
+        # pod-level `splunk.com/sourcetype` into `com.splunk.sourcetype`).
+        # The full processor list MUST be listed here -- the chart
+        # template REPLACES the entire list when the user provides
+        # `service.pipelines.logs.processors`. Defaults captured from a
+        # running 0.150.0 agent (kubectl exec ... cat /conf/relay.yaml).
+        # Re-validate this ordering whenever the chart version is
+        # bumped. See comment on `transform/audit_routing` for context.
+        logs:
+          processors:
+            - memory_limiter
+            - k8s_attributes
+            - filter/logs
+            - batch
+            - resourcedetection
+            - resource
+            - resource/logs
+            - transform/audit_routing
+            - transform/infra_routing
+
+        # Dedicated pipeline for Postgres DBM-style scheduled-SQL events.
+        # Kept SEPARATE from the main `logs` pipeline because:
+        #   * `filter/logs` is opinionated about kube:container:* records
+        #     and would risk dropping sqlquery rows.
+        #   * `transform/audit_routing` and `transform/infra_routing` both
+        #     condition on `k8s.container.name`, which sqlquery records
+        #     don't have -- mixing them would either be a no-op (best
+        #     case) or set sourcetype=kube:container:* (worst case).
+        # The processor list here is intentionally minimal: memory_limiter
+        # for backpressure, resource/infra to stamp the shared resource
+        # attributes (service.namespace, deployment.environment,
+        # k8s.cluster.name), transform/dbm_routing to pin the Splunk
+        # destination, and batch on the way out. Same `splunk_hec/platform_logs`
+        # exporter as the main logs pipeline so we re-use the existing HEC
+        # token + endpoint -- the index override per-record in
+        # transform/dbm_routing is what steers events to nwpay_infra.
+        logs/dbm:
+          receivers:
+            - sqlquery/postgres
+          processors:
+            - memory_limiter
+            - resource/infra
+            - transform/dbm_routing
+            - batch
+          exporters:
+            - splunk_hec/platform_logs
+
+# Cluster-level receiver: K8s object events + cluster metrics.
+#
+# The clusterReceiver runs as its OWN Deployment (separate from the agent
+# DaemonSet) and the chart auto-generates a SEPARATE splunk_hec/platform_metrics
+# exporter for it. The agent-side override under `agent.config.exporters` does
+# NOT apply here, so we have to pin sourcetype + add the NaN filter again on
+# this side. Without the overrides below the splunkd indexer fires
+# `BAD_METRIC_EVENT` / `METRIC_VALUE_NOT_NUMERIC` warnings for source=kubernetes
+# sourcetype=metrics host=unknown index=itsi_im_metrics events:
+#   * sourcetype defaults to `metrics`, which routes through Splunk's strict
+#     legacy-metrics HEC parser instead of the OTel-aware path.
+#   * The k8s_cluster + prometheus/k8s_cluster_receiver receivers occasionally
+#     emit NaN datapoints for ratio metrics (e.g. k8s.namespace.cpu_limit_
+#     utilization when no resource limits are set, k8s.container.cpu_utilization
+#     before usage data is available). Splunk's metrics parser rejects NaN as
+#     "not a floating point value".
+# We pin the sourcetype to match the agent (otel:metrics) and drop NaN data
+# points at the collector with a filter processor before they hit HEC.
+clusterReceiver:
+  enabled: true
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 200m
+      memory: 384Mi
+  config:
+    exporters:
+      splunk_hec/platform_metrics:
+        sourcetype: otel:metrics
+    processors:
+      # Drop malformed K8s cluster metrics before HEC ingest. Splunk's
+      # metrics-type index rejects (a) events without a metric name and
+      # (b) NaN datapoints (common on ratio metrics when limits are unset).
+      # OTTL: value_double != value_double is the IEEE-754 NaN-detect trick.
+      filter/drop_invalid_metrics:
+        error_mode: ignore
+        metrics:
+          metric:
+            - 'name == nil'
+            - 'name == ""'
+          datapoint:
+            - 'value_double != value_double'
+      # Stamp host.name so HEC events don't land as host=unknown.
+      resource/metrics_host:
+        attributes:
+          - key: host.name
+            value: natwest-payments-demo
+            action: upsert
+    service:
+      pipelines:
+        # Both metrics pipelines need the filter inserted as the LAST
+        # processor so it runs after all the chart's enrichment steps
+        # (resource attributes, k8s_attributes, resourcedetection). We
+        # MUST list every default processor: the chart's helm template
+        # replaces the entire processors list when the user sets it,
+        # rather than merging. Defaults captured from chart 0.154.0
+        # (helm template ... | yq cluster-receiver relay.yaml).
+        # Re-validate this ordering whenever we bump the chart version.
+        metrics:
+          processors:
+            - memory_limiter
+            - batch
+            - transform/k8shpascaletargetref
+            - resource
+            - k8s_attributes/metrics
+            - resource/k8s_cluster
+            - resource/metrics_host
+            - filter/drop_invalid_metrics
+        metrics/collector:
+          processors:
+            - memory_limiter
+            - batch
+            - resourcedetection
+            - resource/metrics_host
+            - filter/drop_invalid_metrics
+
+# Gateway disabled - agents send directly to Splunk Observability.
+gateway:
+  enabled: false
+
+# Container log collection via the OTel filelog receiver (native log pipeline).
+logsCollection:
+  containers:
+    enabled: true
+    useSplunkIncludeAnnotation: false
+  checkpointPath: /var/addon/splunk/otel_pos

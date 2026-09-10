@@ -1,0 +1,83 @@
+{
+  "_comment": "Canonical list of APM MetricSets (formerly 'indexed span tags') that must exist in the Splunk Observability Cloud tenant for this demo's Service Map breakdown, Tag Spotlight pivots, and a couple of detectors in terraform/observability.tf to function. Splunk does NOT currently expose a supported public REST API or Terraform resource for managing these; 05d-promote-metricsets.sh and docs/operations/metricsets.md are the two ways to get this list into the tenant. Keep both in sync with this file.",
+  "metricsets": [
+    {
+      "spanTag": "customer.tier",
+      "troubleshooting": true,
+      "monitoring": true,
+      "why": "Bronze / Silver / Gold cohort pivot (Tag Spotlight, Act II.B). Monitoring MTS feeds the [NatWest demo] Bronze tier decline rate detector."
+    },
+    {
+      "spanTag": "customer.location",
+      "troubleshooting": true,
+      "monitoring": true,
+      "why": "Per-city p95 + RPS pivot (Tag Spotlight, ITSI Payments by Location). Monitoring MTS feeds the [NatWest demo] Madrid p95 latency detector."
+    },
+    {
+      "spanTag": "customer.country",
+      "troubleshooting": true,
+      "monitoring": false,
+      "why": "Glass-table choropleth (customer-origin by country)."
+    },
+    {
+      "spanTag": "customer.region",
+      "troubleshooting": true,
+      "monitoring": false,
+      "why": "EU-WEST / EU-SOUTH / EU-CENTRAL grouping."
+    },
+    {
+      "spanTag": "customer.home_country",
+      "troubleshooting": true,
+      "monitoring": false,
+      "why": "Roaming pivots (Tag Spotlight; ITSI roaming KPIs)."
+    },
+    {
+      "spanTag": "payment.scheme",
+      "troubleshooting": true,
+      "monitoring": true,
+      "why": "FPS / BACS / CHAPS / SEPA / SWIFT / Cheque pivot. Monitoring MTS feeds the [NatWest demo] SWIFT error rate detector."
+    },
+    {
+      "spanTag": "payment.roaming",
+      "troubleshooting": true,
+      "monitoring": true,
+      "why": "Cross-border / domestic split. Monitoring MTS feeds the roaming-payment p95 / error-rate KPIs in ITSI."
+    },
+    {
+      "spanTag": "channel",
+      "troubleshooting": true,
+      "monitoring": false,
+      "why": "Mobile / online-banking / branch / bankline cohort (Act II.A.1)."
+    },
+    {
+      "spanTag": "fraud.algo",
+      "troubleshooting": true,
+      "monitoring": false,
+      "why": "Surfaces the regressed pairwise algorithm in Act I.2 / I.4."
+    },
+    {
+      "spanTag": "action.name",
+      "troubleshooting": true,
+      "monitoring": false,
+      "why": "Stable name attached to every recordPageAction span (mirrors the operation name) so RUM Tag Spotlight can group spans by user-action: Send payment, payment.completed, persona.switched, route.transition, payee.selected, validation.failed, cross_launch.clicked, chaos.action.requested, network.context, error.boundary."
+    },
+    {
+      "spanTag": "payment.outcome",
+      "troubleshooting": true,
+      "monitoring": true,
+      "why": "Funnel-bottom dimension stamped on every payment.completed span (success / error / timeout). Monitoring MTS powers the SignalFlow conversion-rate-by-tier chart used in Act II.B."
+    },
+    {
+      "spanTag": "chaos.scenario",
+      "troubleshooting": true,
+      "monitoring": false,
+      "why": "Operator-side click marker on every chaos.action.requested span emitted from the /ops Chaos Dashboard. Pairs with the server-side nwpay:chaos audit event in ITSI so each inject/clear has both a browser-side and a controller-side trail."
+    },
+    {
+      "spanTag": "network.effective_type",
+      "troubleshooting": true,
+      "monitoring": true,
+      "why": "Browser Network Information API value (4g / 3g / 2g / slow-2g / wifi). Lets the Madrid latency story cohort-split between fast-broadband Gold users and 3G Bronze users. Monitoring MTS feeds the SPA p95 by network type chart in the Payments Operations dashboard."
+    }
+  ]
+}

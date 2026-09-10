@@ -1,0 +1,2733 @@
+:root {
+  --nw-purple: #5a287d;
+  --nw-purple-dark: #3f1c5a;
+  --nw-purple-soft: #efeaf5;
+  --nw-accent: #ffb81c;
+  --nw-bg: #f5f3f8;
+  --nw-surface: #ffffff;
+  --nw-border: #ece9f1;
+  --nw-text: #1c1c1c;
+  --nw-muted: #6b6877;
+  --nw-error: #c8102e;
+  --nw-error-bg: #fdecef;
+  --nw-warn: #b65c00;
+  --nw-warn-bg: #fff4e0;
+  --nw-ok: #007a33;
+  --nw-ok-bg: #e6f4ec;
+  --nw-pending: #1a4c8c;
+  --nw-pending-bg: #e5eef9;
+  --nw-radius: 12px;
+  --nw-radius-sm: 8px;
+  --nw-shadow-card: 0 1px 3px rgba(0, 0, 0, 0.06), 0 8px 24px rgba(58, 28, 92, 0.06);
+  font-family: -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--nw-bg);
+  color: var(--nw-text);
+}
+
+.app-shell {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.app-header {
+  background: var(--nw-purple);
+  color: white;
+  padding: 16px 32px;
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.08);
+}
+
+.app-header h1 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+}
+
+.app-header__divider {
+  width: 1px;
+  height: 22px;
+  background: rgba(255, 255, 255, 0.25);
+  display: inline-block;
+}
+
+.app-header nav {
+  display: flex;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.persona-switcher {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: 16px;
+  color: white;
+  font-size: 14px;
+}
+
+.persona-switcher__avatar {
+  font-size: 18px;
+}
+
+.persona-switcher select {
+  background: rgba(255, 255, 255, 0.12);
+  color: white;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 13px;
+}
+
+.persona-switcher select option {
+  color: var(--nw-text);
+  background: white;
+}
+
+.tier-chip {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  font-weight: 700;
+}
+
+.persona-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  margin: 0 0 16px;
+  background: #efeaf5;
+  border-radius: 8px;
+  font-size: 14px;
+  color: var(--nw-text);
+}
+
+.persona-banner span[aria-hidden="true"] {
+  font-size: 20px;
+}
+
+.app-header nav a {
+  color: rgba(255, 255, 255, 0.86);
+  text-decoration: none;
+  font-weight: 500;
+  font-size: 14px;
+  padding: 7px 14px;
+  border-radius: 999px;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.app-header nav a:hover {
+  background: rgba(255, 255, 255, 0.10);
+  color: white;
+}
+
+.app-header nav a.active {
+  background: white;
+  color: var(--nw-purple);
+}
+
+.app-main {
+  padding: 32px;
+  max-width: 960px;
+  width: 100%;
+  margin: 0 auto;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.card {
+  background: var(--nw-surface);
+  border-radius: var(--nw-radius);
+  padding: 24px;
+  box-shadow: var(--nw-shadow-card);
+  border: 1px solid var(--nw-border);
+}
+
+.card h2 {
+  margin-top: 0;
+}
+
+.card__header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 6px;
+}
+
+.card__header--wrap {
+  flex-wrap: wrap;
+}
+
+.card__header h2 {
+  margin: 0 0 4px;
+}
+
+.card__sub {
+  color: var(--nw-muted);
+  font-size: 13px;
+}
+
+.card__link {
+  color: var(--nw-purple);
+  font-weight: 600;
+  font-size: 14px;
+  text-decoration: none;
+}
+
+.card__link:hover {
+  text-decoration: underline;
+}
+
+.mono {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 13px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  margin-bottom: 16px;
+}
+
+.field label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--nw-muted);
+  margin-bottom: 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.field__optional {
+  font-weight: 500;
+  color: var(--nw-muted);
+  text-transform: none;
+  letter-spacing: 0;
+  margin-left: 4px;
+}
+
+.field__help {
+  font-size: 12px;
+  color: var(--nw-muted);
+  margin-top: 6px;
+  line-height: 1.4;
+}
+
+.field input,
+.field select {
+  padding: 10px 12px;
+  border: 1px solid #d8d6df;
+  border-radius: var(--nw-radius-sm);
+  font-size: 15px;
+  background: white;
+  color: var(--nw-text);
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+
+.field input:focus,
+.field select:focus {
+  outline: none;
+  border-color: var(--nw-purple);
+  box-shadow: 0 0 0 3px rgba(90, 40, 125, 0.15);
+}
+
+.field input[aria-invalid="true"] {
+  border-color: var(--nw-error);
+}
+
+.row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+button.primary {
+  background: var(--nw-purple);
+  color: white;
+  border: none;
+  padding: 12px 20px;
+  border-radius: var(--nw-radius-sm);
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 120ms ease, transform 120ms ease;
+}
+
+button.primary:hover:not(:disabled) {
+  background: var(--nw-purple-dark);
+}
+
+button.primary:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+button.primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+button.ghost {
+  background: transparent;
+  color: var(--nw-purple);
+  border: 1px solid #d8d6df;
+  padding: 11px 18px;
+  border-radius: var(--nw-radius-sm);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+button.ghost:hover:not(:disabled) {
+  background: var(--nw-purple-soft);
+  border-color: var(--nw-purple);
+}
+
+button.ghost:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.status-line {
+  margin-top: 16px;
+  padding: 12px 16px;
+  border-radius: 8px;
+  background: #efeaf5;
+  font-family: ui-monospace, "SF Mono", monospace;
+  font-size: 13px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.status-line.error {
+  background: #fdecef;
+  color: var(--nw-error);
+}
+
+.status-line.ok {
+  background: #e6f4ec;
+  color: var(--nw-ok);
+}
+
+table.history {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+table.history th,
+table.history td {
+  text-align: left;
+  padding: 10px 12px;
+  border-bottom: 1px solid #ece9f1;
+  font-size: 14px;
+}
+
+table.history th {
+  color: var(--nw-muted);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+/* ---- Login page ---------------------------------------------------------- */
+.login-page {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px;
+  background:
+    radial-gradient(circle at 20% 20%, rgba(255, 184, 28, 0.18) 0%, transparent 45%),
+    radial-gradient(circle at 80% 80%, rgba(255, 255, 255, 0.10) 0%, transparent 50%),
+    linear-gradient(135deg, var(--nw-purple) 0%, var(--nw-purple-dark) 100%);
+}
+
+.login-card {
+  width: 100%;
+  max-width: 380px;
+  padding: 32px;
+}
+
+.login-card h2 {
+  margin: 0 0 4px;
+  font-size: 22px;
+}
+
+.login-brand {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 20px;
+}
+
+/* ---- NatWest brand mark ------------------------------------------------- */
+/* The logo is a square PNG with its own dark-purple background built in,
+   so we render it as a plain <img> and keep wrappers minimal. The slight
+   rounding lifts the mark off the purple header bar without obscuring it. */
+.nw-logo {
+  display: inline-block;
+  vertical-align: middle;
+  border-radius: 6px;
+  flex-shrink: 0;
+  user-select: none;
+}
+
+/* Header lockup: white wordmark on the purple bar, with a faint divider
+   between the brand and the product name. */
+.app-header__brand {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.app-header__divider {
+  opacity: 0.4;
+  font-weight: 300;
+}
+
+.app-header__product {
+  letter-spacing: 0.2px;
+  font-weight: 500;
+  opacity: 0.95;
+}
+
+.login-subtitle {
+  color: var(--nw-muted);
+  margin: 0 0 24px;
+  font-size: 14px;
+}
+
+.login-card button.primary {
+  width: 100%;
+  margin-top: 8px;
+}
+
+/* ---- Header user menu --------------------------------------------------- */
+.user-menu {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-left: 16px;
+  color: white;
+  font-size: 14px;
+}
+
+.user-menu__name {
+  font-weight: 600;
+  opacity: 0.95;
+}
+
+.link-button {
+  background: transparent;
+  color: rgba(255, 255, 255, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  padding: 5px 12px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.link-button:hover {
+  background: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.55);
+}
+
+.link-button:focus-visible {
+  outline: 2px solid var(--nw-accent);
+  outline-offset: 2px;
+}
+
+/* ---- Mobile-channel phone frame ---------------------------------------- */
+/* Activated when ?app=mobile is in the URL (see config.ts::detectChannel).
+   Renders the SPA inside a phone-shaped chrome on a dark stage so the demo
+   audience sees an unmistakably mobile-shaped surface. The React tree
+   inside the screen is identical to the web variant; only the framing
+   and the RUM applicationName / channel global attribute differ. */
+.mobile-stage {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  background: radial-gradient(circle at 50% 20%, #2a1340 0%, #110620 70%);
+  padding: 32px 16px;
+}
+
+.mobile-frame {
+  position: relative;
+  width: min(420px, 95vw);
+  height: min(880px, 92vh);
+  background: #0c0712;
+  border-radius: 48px;
+  padding: 14px;
+  box-shadow:
+    0 0 0 2px rgba(255, 255, 255, 0.05),
+    0 30px 60px rgba(0, 0, 0, 0.55),
+    inset 0 0 0 6px #1a0f28;
+  overflow: hidden;
+}
+
+.mobile-frame__notch {
+  position: absolute;
+  top: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 40%;
+  height: 26px;
+  background: #0c0712;
+  border-radius: 0 0 18px 18px;
+  z-index: 2;
+}
+
+.mobile-frame__home {
+  position: absolute;
+  bottom: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 38%;
+  height: 5px;
+  background: rgba(255, 255, 255, 0.5);
+  border-radius: 5px;
+  z-index: 2;
+}
+
+.mobile-frame__screen {
+  width: 100%;
+  height: 100%;
+  background: var(--nw-bg);
+  border-radius: 36px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Inside the phone frame: tighten the SPA layout so the desktop-spaced
+   header / cards still fit on a phone-width canvas. */
+.mobile-frame__screen .app-shell {
+  min-height: 100%;
+}
+
+.mobile-frame__screen .app-header {
+  padding: 12px 16px;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.mobile-frame__screen .app-header h1 {
+  font-size: 16px;
+}
+
+.mobile-frame__screen .app-header nav {
+  margin-left: 0;
+  width: 100%;
+  order: 3;
+  justify-content: space-between;
+  font-size: 13px;
+}
+
+.mobile-frame__screen .app-main {
+  padding: 12px;
+}
+
+.mobile-frame__screen .card {
+  padding: 16px;
+}
+
+.mobile-frame__screen .row {
+  flex-direction: column;
+  gap: 8px;
+}
+
+.mobile-stage__caption {
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 13px;
+  letter-spacing: 0.3px;
+}
+
+.mobile-stage__caption code {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  padding: 1px 6px;
+  border-radius: 4px;
+  color: var(--nw-accent);
+  font-size: 12px;
+}
+
+/* ---------------------------------------------------------------- */
+/* PSD2 Strong Customer Authentication overlay (mobile channel only).
+   Renders as a full-screen scrim over the SendMoney card with a
+   centered "Approve on phone" panel + spinner. The visual cue is
+   what the audience pivots to in the talk-track when explaining
+   the new sca_challenge audit events.                               */
+/* ---------------------------------------------------------------- */
+.sca-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(11, 18, 32, 0.78);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  backdrop-filter: blur(4px);
+  animation: scaFade 0.18s ease-out;
+}
+.sca-card {
+  width: min(360px, 92vw);
+  background: linear-gradient(180deg, #1f2937 0%, #111827 100%);
+  border: 1px solid rgba(90, 40, 125, 0.6);
+  border-radius: 14px;
+  padding: 28px 24px 24px;
+  text-align: center;
+  color: #f3f4f6;
+  box-shadow: 0 24px 48px rgba(0, 0, 0, 0.55);
+}
+.sca-bell {
+  font-size: 38px;
+  margin-bottom: 6px;
+  filter: drop-shadow(0 0 8px rgba(248, 190, 52, 0.35));
+}
+.sca-card h3 {
+  margin: 4px 0 6px;
+  font-size: 18px;
+  font-weight: 600;
+}
+.sca-amount {
+  font-size: 28px;
+  font-weight: 700;
+  margin: 4px 0 10px;
+  color: var(--nw-accent, #5A287D);
+}
+.sca-sub {
+  font-size: 12px;
+  color: #94a3b8;
+  margin: 4px 0 18px;
+  line-height: 1.4;
+}
+.sca-status {
+  font-size: 14px;
+  color: #99D18B;
+  margin: 8px 0 0;
+  font-weight: 600;
+}
+.sca-spinner {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 3px solid rgba(255, 255, 255, 0.15);
+  border-top-color: #5A287D;
+  margin: 6px auto 0;
+  animation: scaSpin 0.9s linear infinite;
+}
+@keyframes scaSpin {
+  to { transform: rotate(360deg); }
+}
+@keyframes scaFade {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+/* ---------------------------------------------------------------- */
+/* Presenter HUD — bottom-right fixed panel.
+   Only mounted when ?presenter=1 was on the URL. Visually neutral
+   (slate background, white text) so it doesn't fight with the NatWest
+   brand chrome above. Width is tight; clicks always go through to the
+   SPA underneath because the panel has its own fixed footprint.        */
+/* ---------------------------------------------------------------- */
+.presenter-hud {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  width: 320px;
+  max-width: calc(100vw - 32px);
+  background: rgba(20, 22, 38, 0.94);
+  color: #f1f1f6;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+  font-size: 13px;
+  z-index: 1100;
+  /* Constrain inner spacing to a single rhythm so the panel reads as
+     one unit at a glance from the stage. */
+  padding: 10px 12px;
+  font-family: -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+
+.presenter-hud__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.presenter-hud__title {
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  font-size: 12px;
+  text-transform: uppercase;
+  color: #c5b3dc;
+}
+
+.presenter-hud__icon {
+  background: transparent;
+  color: #f1f1f6;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 4px;
+  width: 22px;
+  height: 22px;
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+}
+
+.presenter-hud__row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 4px 0;
+  border-bottom: 1px dashed rgba(255, 255, 255, 0.06);
+}
+
+.presenter-hud__row:last-of-type {
+  border-bottom: none;
+}
+
+.presenter-hud__row--alert {
+  background: rgba(181, 1, 1, 0.15);
+  margin: 0 -12px;
+  padding: 6px 12px;
+}
+
+.presenter-hud__label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: #9c9bae;
+  flex: 0 0 70px;
+}
+
+.presenter-hud__value {
+  flex: 1;
+  word-break: break-word;
+}
+
+.presenter-hud__muted {
+  color: #6c6b80;
+  font-style: italic;
+}
+
+.presenter-hud__ok {
+  color: #99d18b;
+  font-weight: 600;
+}
+
+.presenter-hud__sub {
+  font-size: 11px;
+  color: #9c9bae;
+}
+
+.presenter-hud__link {
+  color: #ffb81c;
+  text-decoration: none;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 12px;
+}
+
+.presenter-hud__link:hover {
+  text-decoration: underline;
+}
+
+.presenter-hud__incident-list {
+  margin: 0;
+  padding-left: 12px;
+  list-style: none;
+}
+
+.presenter-hud__incident-list li {
+  font-size: 12px;
+  margin: 2px 0;
+  color: #f8d4d4;
+}
+
+.presenter-hud__incident-list code {
+  color: #ffb81c;
+}
+
+.presenter-hud__timers {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.presenter-hud__timer {
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 6px;
+  padding: 6px 8px;
+}
+
+.presenter-hud__timer-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: #c5b3dc;
+}
+
+.presenter-hud__timer-clock {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 22px;
+  font-weight: 700;
+  margin: 2px 0 4px;
+  color: #f1f1f6;
+}
+
+.presenter-hud__timer-controls {
+  display: flex;
+  gap: 4px;
+}
+
+.presenter-hud__timer-controls button {
+  flex: 1;
+  background: rgba(255, 255, 255, 0.08);
+  color: #f1f1f6;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 4px;
+  padding: 3px 0;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.presenter-hud__timer-controls button:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.presenter-hud__timer-controls button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.presenter-hud__collapsed {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 1100;
+  background: rgba(20, 22, 38, 0.94);
+  color: #ffb81c;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 6px;
+  padding: 6px 12px;
+  font-weight: 700;
+  font-size: 12px;
+  letter-spacing: 0.5px;
+  cursor: pointer;
+}
+
+/* ---------------------------------------------------------------- */
+/* Account hero — Home page                                          */
+/* The hero is two stacked elements: a greeting + tier chip on top,   */
+/* then a purple-gradient "current account" card with sort code,      */
+/* masked account number and available balance. The gradient mirrors  */
+/* the NatWest debit-card mark so the audience reads this as the      */
+/* customer's account at a glance.                                    */
+/* ---------------------------------------------------------------- */
+.account-hero {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.account-hero__greeting {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.account-hero__hello {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 600;
+  color: var(--nw-text);
+}
+
+.account-hero__card {
+  position: relative;
+  border-radius: 16px;
+  padding: 22px 24px;
+  color: white;
+  background:
+    radial-gradient(circle at 90% 10%, rgba(255, 184, 28, 0.25) 0%, transparent 55%),
+    radial-gradient(circle at 10% 90%, rgba(255, 255, 255, 0.10) 0%, transparent 50%),
+    linear-gradient(135deg, var(--nw-purple) 0%, var(--nw-purple-dark) 100%);
+  box-shadow: 0 8px 20px rgba(58, 28, 92, 0.18);
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 24px;
+  overflow: hidden;
+}
+
+.account-hero__card::after {
+  content: "";
+  position: absolute;
+  top: -40%;
+  right: -10%;
+  width: 320px;
+  height: 320px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(255, 184, 28, 0.18) 0%, transparent 60%);
+  pointer-events: none;
+}
+
+.account-hero__meta {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  position: relative;
+  z-index: 1;
+}
+
+.account-hero__product {
+  font-size: 13px;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.78);
+  font-weight: 600;
+}
+
+.account-hero__numbers {
+  display: flex;
+  gap: 8px;
+  font-size: 14px;
+  color: rgba(255, 255, 255, 0.92);
+  font-feature-settings: "tnum";
+}
+
+.account-hero__numbers span[aria-hidden="true"] {
+  color: rgba(255, 255, 255, 0.4);
+}
+
+.account-hero__balance {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  text-align: right;
+  position: relative;
+  z-index: 1;
+}
+
+.account-hero__balance-label {
+  font-size: 12px;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.78);
+}
+
+.account-hero__balance-amount {
+  font-size: 32px;
+  font-weight: 700;
+  letter-spacing: -0.5px;
+  margin: 2px 0 4px;
+  color: white;
+  font-feature-settings: "tnum";
+}
+
+.account-hero__balance-sub {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.75);
+}
+
+/* ---------------------------------------------------------------- */
+/* Quick actions row — Home page                                     */
+/* Four pill-shaped tiles (Send money / Pay bill / Transfer / etc.)  */
+/* that link to other SPA routes. Hover lifts them slightly so the   */
+/* affordance is obvious without us spelling it out.                  */
+/* ---------------------------------------------------------------- */
+.quick-actions {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+}
+
+.quick-action {
+  background: var(--nw-surface);
+  border: 1px solid var(--nw-border);
+  border-radius: var(--nw-radius);
+  padding: 14px 16px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  text-decoration: none;
+  color: var(--nw-text);
+  transition: transform 120ms ease, box-shadow 120ms ease, border-color 120ms ease;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+}
+
+.quick-action:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 14px rgba(58, 28, 92, 0.10);
+  border-color: var(--nw-purple);
+}
+
+.quick-action__icon {
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  background: var(--nw-purple-soft);
+  color: var(--nw-purple);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  flex-shrink: 0;
+}
+
+.quick-action__body {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.quick-action__label {
+  font-weight: 600;
+  font-size: 15px;
+}
+
+.quick-action__hint {
+  font-size: 12px;
+  color: var(--nw-muted);
+}
+
+/* ---------------------------------------------------------------- */
+/* Activity list (Home page recent-activity preview)                 */
+/* ---------------------------------------------------------------- */
+.activity-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.activity-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--nw-border);
+  gap: 16px;
+}
+
+.activity-row:last-child {
+  border-bottom: none;
+}
+
+.activity-row__main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.activity-row__title {
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--nw-text);
+}
+
+.activity-row__meta {
+  font-size: 12px;
+  color: var(--nw-muted);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.activity-row__pill {
+  background: var(--nw-purple-soft);
+  color: var(--nw-purple);
+  border-radius: 999px;
+  padding: 1px 8px;
+  font-size: 10px;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+  font-weight: 700;
+}
+
+.activity-row__right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+}
+
+.activity-row__amount {
+  font-weight: 600;
+  font-size: 15px;
+  font-feature-settings: "tnum";
+}
+
+/* ---------------------------------------------------------------- */
+/* StatusPill — colour-coded status badge used everywhere.           */
+/* ---------------------------------------------------------------- */
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  background: var(--nw-purple-soft);
+  color: var(--nw-text);
+  white-space: nowrap;
+}
+
+.status-pill__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  display: inline-block;
+}
+
+.status-pill--ok      { background: var(--nw-ok-bg);      color: var(--nw-ok); }
+.status-pill--warn    { background: var(--nw-warn-bg);    color: var(--nw-warn); }
+.status-pill--error   { background: var(--nw-error-bg);   color: var(--nw-error); }
+.status-pill--pending { background: var(--nw-pending-bg); color: var(--nw-pending); }
+.status-pill--neutral { background: #efeaf5; color: var(--nw-muted); }
+
+/* ---------------------------------------------------------------- */
+/* TraceLink — copy + APM-pivot chip used on every trace id.         */
+/* ---------------------------------------------------------------- */
+.trace-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 12px;
+}
+
+.trace-link__id {
+  background: var(--nw-purple-soft);
+  color: var(--nw-purple-dark);
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 3px 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.trace-link__id:hover {
+  border-color: var(--nw-purple);
+  background: #e7ddf2;
+}
+
+.trace-link__id-text {
+  letter-spacing: -0.2px;
+}
+
+.trace-link__copy {
+  font-size: 11px;
+  opacity: 0.65;
+}
+
+.trace-link__apm {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  color: var(--nw-purple);
+  text-decoration: none;
+  font-weight: 700;
+  font-size: 11px;
+  letter-spacing: 0.4px;
+  border: 1px solid var(--nw-purple);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+.trace-link__apm:hover {
+  background: var(--nw-purple);
+  color: white;
+}
+
+.trace-link__ext {
+  font-size: 10px;
+  margin-left: 1px;
+}
+
+.trace-link--empty {
+  color: var(--nw-muted);
+}
+
+/* ---------------------------------------------------------------- */
+/* Send Money — payee chips, amount input, advanced disclosure       */
+/* ---------------------------------------------------------------- */
+.send-card .send-form {
+  margin-top: 12px;
+}
+
+.send-form__group {
+  border: none;
+  padding: 0;
+  margin: 0 0 18px;
+}
+
+.send-form__group legend {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: var(--nw-muted);
+  margin-bottom: 10px;
+  padding: 0;
+}
+
+.payee-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 10px;
+}
+
+.payee-chip {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  background: white;
+  border: 1px solid var(--nw-border);
+  border-radius: var(--nw-radius);
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+  transition: border-color 120ms ease, box-shadow 120ms ease, background 120ms ease;
+}
+
+.payee-chip:hover {
+  border-color: var(--nw-purple);
+  background: var(--nw-purple-soft);
+}
+
+.payee-chip--selected {
+  border-color: var(--nw-purple);
+  background: var(--nw-purple-soft);
+  box-shadow: inset 0 0 0 1px var(--nw-purple);
+}
+
+.payee-chip__avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: white;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  flex-shrink: 0;
+  border: 1px solid var(--nw-border);
+}
+
+.payee-chip--selected .payee-chip__avatar {
+  border-color: var(--nw-purple);
+}
+
+.payee-chip--new .payee-chip__avatar {
+  background: white;
+  color: var(--nw-purple);
+  font-weight: 700;
+  font-size: 22px;
+  line-height: 1;
+}
+
+.payee-chip__body {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+
+.payee-chip__name {
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--nw-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.payee-chip__sub {
+  font-size: 12px;
+  color: var(--nw-muted);
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  letter-spacing: -0.2px;
+}
+
+.amount-input {
+  display: flex;
+  align-items: stretch;
+  border: 1px solid #d8d6df;
+  border-radius: var(--nw-radius-sm);
+  background: white;
+  overflow: hidden;
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+
+.amount-input:focus-within {
+  border-color: var(--nw-purple);
+  box-shadow: 0 0 0 3px rgba(90, 40, 125, 0.15);
+}
+
+.amount-input__symbol {
+  background: #f7f5fb;
+  color: var(--nw-purple-dark);
+  font-weight: 700;
+  font-size: 16px;
+  display: flex;
+  align-items: center;
+  padding: 0 14px;
+  border-right: 1px solid var(--nw-border);
+}
+
+.amount-input input {
+  border: none;
+  outline: none;
+  flex: 1;
+  padding: 12px 14px;
+  font-size: 22px;
+  font-weight: 600;
+  font-feature-settings: "tnum";
+  background: transparent;
+  min-width: 0;
+}
+
+.send-form__advanced {
+  border-top: 1px dashed var(--nw-border);
+  padding-top: 14px;
+  margin-bottom: 18px;
+}
+
+.send-form__advanced summary {
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--nw-purple);
+  list-style: none;
+  user-select: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.send-form__advanced summary::-webkit-details-marker {
+  display: none;
+}
+
+.send-form__advanced summary::before {
+  content: "\25B8";
+  display: inline-block;
+  transition: transform 120ms ease;
+}
+
+.send-form__advanced[open] summary::before {
+  transform: rotate(90deg);
+}
+
+.send-form__advanced .row {
+  margin-top: 14px;
+  grid-template-columns: repeat(3, 1fr);
+}
+
+.send-form__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding-top: 16px;
+  border-top: 1px solid var(--nw-border);
+  margin-top: 8px;
+}
+
+.send-form__summary {
+  display: flex;
+  flex-direction: column;
+}
+
+.send-form__summary-label {
+  font-size: 12px;
+  color: var(--nw-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  font-weight: 600;
+}
+
+.send-form__summary-amount {
+  font-size: 26px;
+  font-weight: 700;
+  font-feature-settings: "tnum";
+  color: var(--nw-text);
+  letter-spacing: -0.5px;
+}
+
+/* ---------------------------------------------------------------- */
+/* Success card — shown after a successful Send Money submit.        */
+/* ---------------------------------------------------------------- */
+.success-card {
+  padding: 0;
+  overflow: hidden;
+}
+
+.success-card__hero {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 20px 24px;
+  color: white;
+  background: linear-gradient(135deg, var(--nw-ok) 0%, #0a5a26 100%);
+}
+
+.success-card__hero--warn {
+  background: linear-gradient(135deg, #b65c00 0%, #7a3d00 100%);
+}
+
+.success-card__hero--error {
+  background: linear-gradient(135deg, var(--nw-error) 0%, #840c1c 100%);
+}
+
+.success-card__hero--pending,
+.success-card__hero--neutral {
+  background: linear-gradient(135deg, var(--nw-purple) 0%, var(--nw-purple-dark) 100%);
+}
+
+.success-card__icon {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.18);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 26px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.success-card__hero-text h2 {
+  margin: 0 0 4px;
+  color: white;
+  font-size: 20px;
+}
+
+.success-card__hero-text .status-pill {
+  background: rgba(255, 255, 255, 0.22);
+  color: white;
+}
+
+.success-card__details {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px 24px;
+  padding: 22px 24px;
+  margin: 0;
+}
+
+.success-card__details > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.success-card__details dt {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--nw-muted);
+  font-weight: 600;
+}
+
+.success-card__details dd {
+  margin: 0;
+  font-size: 14px;
+  color: var(--nw-text);
+  word-break: break-word;
+}
+
+.success-card__amount {
+  font-size: 22px !important;
+  font-weight: 700;
+  font-feature-settings: "tnum";
+  letter-spacing: -0.4px;
+}
+
+.success-card__payee {
+  font-weight: 600;
+  font-size: 15px;
+}
+
+.success-card__payee-sub {
+  display: block;
+  font-size: 12px;
+  color: var(--nw-muted);
+  margin-top: 2px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+}
+
+.success-card__actions {
+  display: flex;
+  gap: 12px;
+  padding: 0 24px 22px;
+}
+
+/* ---------------------------------------------------------------- */
+/* Status page detail card                                           */
+/* ---------------------------------------------------------------- */
+.status-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.status-form__actions {
+  display: flex;
+  gap: 10px;
+}
+
+.status-detail {
+  border-radius: var(--nw-radius);
+  border: 1px solid var(--nw-border);
+  margin-top: 22px;
+  overflow: hidden;
+}
+
+.status-detail--error,
+.status-detail--neutral {
+  padding: 18px 22px;
+  background: #f8f6fb;
+}
+
+.status-detail--error {
+  background: var(--nw-error-bg);
+  border-color: rgba(200, 16, 46, 0.3);
+  color: var(--nw-error);
+}
+
+.status-detail--error h3,
+.status-detail--neutral h3 {
+  margin: 0 0 6px;
+  font-size: 16px;
+}
+
+.status-detail__hint {
+  color: var(--nw-muted);
+  font-size: 13px;
+  margin: 8px 0 0;
+}
+
+.status-detail__hero {
+  padding: 18px 22px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  background: var(--nw-purple-soft);
+  border-bottom: 1px solid var(--nw-border);
+}
+
+.status-detail--ok .status-detail__hero {
+  background: var(--nw-ok-bg);
+}
+
+.status-detail--warn .status-detail__hero {
+  background: var(--nw-warn-bg);
+}
+
+.status-detail__hero-text {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.status-detail__hero h3 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.status-detail__id {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 12px;
+  color: var(--nw-muted);
+}
+
+.status-detail__grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px 24px;
+  padding: 22px;
+  margin: 0;
+}
+
+.status-detail__grid > div {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.status-detail__grid .status-detail__full {
+  grid-column: span 2;
+}
+
+.status-detail__grid dt {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--nw-muted);
+  font-weight: 600;
+}
+
+.status-detail__grid dd {
+  margin: 0;
+  font-size: 14px;
+  color: var(--nw-text);
+  word-break: break-word;
+}
+
+.status-detail__amount {
+  font-size: 22px !important;
+  font-weight: 700;
+  letter-spacing: -0.4px;
+  font-feature-settings: "tnum";
+}
+
+.status-detail__warn {
+  color: var(--nw-warn);
+  font-weight: 600;
+}
+
+/* ---------------------------------------------------------------- */
+/* Recent Payments page                                              */
+/* ---------------------------------------------------------------- */
+.recent-page__status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  color: var(--nw-muted);
+}
+
+.recent-page__updated {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.recent-page__updated--error {
+  color: var(--nw-error);
+}
+
+.recent-page__pulse {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--nw-ok);
+  display: inline-block;
+  box-shadow: 0 0 0 0 rgba(0, 122, 51, 0.6);
+  animation: pulse 1.8s infinite;
+}
+
+@keyframes pulse {
+  0%   { box-shadow: 0 0 0 0 rgba(0, 122, 51, 0.5); }
+  70%  { box-shadow: 0 0 0 8px rgba(0, 122, 51, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(0, 122, 51, 0); }
+}
+
+.filter-chips {
+  display: flex;
+  gap: 8px;
+  margin: 14px 0 12px;
+  flex-wrap: wrap;
+}
+
+.filter-chip {
+  background: white;
+  border: 1px solid var(--nw-border);
+  border-radius: 999px;
+  padding: 6px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--nw-muted);
+  transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+
+.filter-chip:hover {
+  border-color: var(--nw-purple);
+  color: var(--nw-purple);
+}
+
+.filter-chip--active {
+  background: var(--nw-purple);
+  color: white;
+  border-color: var(--nw-purple);
+}
+
+.filter-chip__count {
+  background: rgba(0, 0, 0, 0.08);
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.filter-chip--active .filter-chip__count {
+  background: rgba(255, 255, 255, 0.24);
+}
+
+.recent-table {
+  margin-top: 4px;
+}
+
+.recent-table__when {
+  display: flex;
+  flex-direction: column;
+  font-feature-settings: "tnum";
+}
+
+.recent-table__when-sub {
+  font-size: 11px;
+  color: var(--nw-muted);
+}
+
+.recent-table__customer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.recent-table__customer-id {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 12px;
+}
+
+.recent-table__row--dim {
+  opacity: 0.55;
+}
+
+.recent-table__row--dim:hover {
+  opacity: 0.85;
+}
+
+.source-pill {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  text-transform: uppercase;
+}
+
+.source-pill--gateway {
+  background: #e6f4ec;
+  color: var(--nw-ok);
+}
+
+.source-pill--local {
+  background: var(--nw-purple-soft);
+  color: var(--nw-purple);
+}
+
+/* ---------------------------------------------------------------- */
+/* Responsive tweaks                                                 */
+/* ---------------------------------------------------------------- */
+@media (max-width: 720px) {
+  .app-header {
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+  .app-header nav {
+    order: 5;
+    width: 100%;
+    overflow-x: auto;
+    margin-left: 0;
+  }
+  .account-hero__card {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 16px;
+  }
+  .account-hero__balance {
+    align-items: flex-start;
+    text-align: left;
+  }
+  .send-form__footer {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+  }
+  .success-card__details,
+  .status-detail__grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Inside the mobile phone frame, lay out the same primitives in a
+   tighter vertical column. We don't redefine them — just tweak. */
+.mobile-frame__screen .account-hero__card {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 16px 18px;
+}
+
+.mobile-frame__screen .account-hero__balance {
+  align-items: flex-start;
+  text-align: left;
+}
+
+.mobile-frame__screen .account-hero__balance-amount {
+  font-size: 26px;
+}
+
+.mobile-frame__screen .quick-actions {
+  grid-template-columns: repeat(2, 1fr);
+}
+
+.mobile-frame__screen .payee-grid {
+  grid-template-columns: 1fr;
+}
+
+.mobile-frame__screen .send-form__advanced .row {
+  grid-template-columns: 1fr;
+}
+
+.mobile-frame__screen .success-card__details,
+.mobile-frame__screen .status-detail__grid {
+  grid-template-columns: 1fr;
+}
+
+.mobile-frame__screen .recent-table {
+  font-size: 13px;
+}
+
+/* ---------------------------------------------------------------- */
+/* Chaos Dashboard (/ops) — presenter-only demo controls.            */
+/* Gated behind config.opsMode in App.tsx; never reachable for an    */
+/* end-user session. The colour palette intentionally diverges from  */
+/* the rest of the SPA so the operator KNOWS this surface mutates    */
+/* the cluster.                                                       */
+/* ---------------------------------------------------------------- */
+
+.nav-link--ops,
+.app-header nav .nav-link--ops {
+  color: #ffe8b2;
+}
+
+.nav-link--ops:hover,
+.nav-link--ops.active {
+  background: rgba(255, 184, 28, 0.18);
+  color: #fff8e7;
+}
+
+/* ---------------------------------------------------------------- */
+/* External cross-launch links (Observability, ITSI). Same visual    */
+/* weight as the in-app NavLinks so the menu still reads as one     */
+/* row, but slightly tinted and trailed by a small ↗ glyph so the   */
+/* user knows the click leaves the SPA. The glyph is its own span   */
+/* (not a CSS ::after content) so screen readers don't try to       */
+/* pronounce it -- aria-hidden on the span keeps it out of the      */
+/* accessibility tree.                                              */
+/* ---------------------------------------------------------------- */
+.nav-link--external,
+.app-header nav a.nav-link--external {
+  color: rgba(255, 255, 255, 0.78);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.nav-link--external:hover {
+  color: white;
+  background: rgba(255, 255, 255, 0.10);
+}
+
+.nav-link--external .nav-link__ext-glyph {
+  font-size: 11px;
+  line-height: 1;
+  opacity: 0.7;
+  transform: translateY(-1px);
+}
+
+.ops-page {
+  padding: 24px 28px 64px;
+  /* 5-up grid at a much wider page cap. On a 2400px-wide viewport
+   * each card lands at ~460px (gap 14px * 4 = 56px, padding 28px * 2
+   * = 56px, content = 2288px / 5 = ~458px). On a 1920px FHD viewport
+   * the page fills the screen and cards are ~360px each. The
+   * responsive cascade below still drops column count on smaller
+   * displays so the cards never compress below ~280px wide. */
+  max-width: 2400px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+}
+
+.ops-banner {
+  /* Match the NatWest banking app's brand gradient
+   * (.account-hero, .splash uses the same purple ramp). The amber
+   * accent rail on the bottom is the same accent the brand uses for
+   * "alerts / promotions" - reads as "this is a controls strip" without
+   * the alarming red of an actual incident.
+   *
+   * Compact single-row layout: title and the actions cluster (armed
+   * count + Recover all) sit on the same baseline, separated by
+   * justify-content: space-between. Vertical padding tightened to
+   * 12px now that the descriptive paragraph is gone - saves ~70px of
+   * page height which is precious now that all 18 cards are on
+   * screen at 5-up. */
+  background: linear-gradient(135deg, var(--nw-purple) 0%, var(--nw-purple-dark) 100%);
+  color: white;
+  border-radius: var(--nw-radius);
+  padding: 12px 24px;
+  display: flex;
+  justify-content: space-between;
+  gap: 20px;
+  align-items: center;
+  flex-wrap: wrap;
+  box-shadow: 0 10px 24px rgba(58, 28, 92, 0.24);
+  border-bottom: 3px solid var(--nw-accent);
+}
+
+.ops-banner h1 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.ops-banner__actions {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.ops-banner__stat {
+  /* Inline pill: armed-count and label on the same horizontal axis,
+   * which matches the visual rhythm of the rest of the row (h1 +
+   * button) instead of being a tall stacked card. */
+  display: flex;
+  flex-direction: row;
+  align-items: baseline;
+  background: rgba(0, 0, 0, 0.22);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--nw-radius-sm);
+  padding: 6px 14px;
+  gap: 8px;
+}
+
+.ops-banner__stat-value {
+  font-size: 20px;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--nw-accent);
+}
+
+.ops-banner__stat-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: rgba(255, 255, 255, 0.78);
+  white-space: nowrap;
+}
+
+.ops-banner__recover {
+  background: var(--nw-accent);
+  color: var(--nw-purple-dark);
+  border: 0;
+  padding: 8px 18px;
+  font-weight: 700;
+  font-size: 14px;
+  border-radius: var(--nw-radius-sm);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: transform 0.05s ease, background 120ms ease;
+}
+
+.ops-banner__recover:hover:not(:disabled) {
+  transform: translateY(-1px);
+  background: #ffc94a;
+}
+
+.ops-banner__recover:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.ops-error {
+  background: var(--nw-error-bg);
+  color: var(--nw-error);
+  border-left: 4px solid var(--nw-error);
+  border-radius: var(--nw-radius-sm);
+  padding: 12px 16px;
+  font-size: 14px;
+}
+
+.ops-loading {
+  background: var(--nw-surface);
+  border: 1px solid var(--nw-border);
+  border-radius: var(--nw-radius);
+  padding: 24px;
+  text-align: center;
+  color: var(--nw-muted);
+}
+
+.chaos-section {
+  background: var(--nw-surface);
+  border: 1px solid var(--nw-border);
+  border-radius: var(--nw-radius);
+  padding: 20px 24px 24px;
+  box-shadow: var(--nw-shadow-card);
+}
+
+.chaos-section > header {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--nw-border);
+}
+
+.chaos-section > header h2 {
+  margin: 0;
+  font-size: 17px;
+  color: var(--nw-purple);
+}
+
+.chaos-section > header p {
+  margin: 0;
+  color: var(--nw-muted);
+  font-size: 13px;
+}
+
+.chaos-grid {
+  display: grid;
+  /* 5 columns on desktop, paired with the ops-page max-width: 2400px
+   * above. On a typical 1920px FHD monitor the page fills the screen
+   * and cards are ~360px each; on 2560px QHD they expand to ~460px;
+   * on 1440px laptops the responsive cascade below drops to 4 cols
+   * (then 3 / 2 / 1) so cards never get narrower than ~280px.
+   *
+   * minmax(0, 1fr) lets the cards shrink without grid-blowout from
+   * long target-service codes. */
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.chaos-card {
+  /* Soft NatWest-purple wash on the card surface instead of the
+   * off-white #fcfbfd used previously; keeps the brand purple visible
+   * even when no scenario is armed. */
+  background: linear-gradient(180deg, #ffffff 0%, var(--nw-purple-soft) 140%);
+  border: 1px solid var(--nw-border);
+  border-radius: var(--nw-radius-sm);
+  padding: 14px 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  position: relative;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  min-width: 0;
+}
+
+.chaos-card--danger {
+  /* Infra-outage cards stay red-tinted - the colour cue is functional,
+   * not decorative (signals "this scales pods to zero / deletes pods"
+   * and requires the confirmation modal). */
+  border-color: #f0c5b2;
+  background: linear-gradient(180deg, #fff8f5 0%, #fcfbfd 60%);
+}
+
+.chaos-card--armed {
+  /* NatWest's secondary brand colour (amber) is reserved for "this
+   * needs attention" affordances in the rest of the SPA (HUD
+   * indicators, the nav-link--ops). Reuse it here so armed cards stand
+   * out against the purple-wash baseline without introducing a 4th
+   * colour to the palette. */
+  border-color: var(--nw-accent);
+  box-shadow: 0 0 0 1px rgba(255, 184, 28, 0.40);
+  background: linear-gradient(180deg, #fffaee 0%, #ffffff 80%);
+}
+
+/* Card head is laid out as three vertical rows:
+ *   1) chaos-card__pills  - severity + state, full width, left-aligned
+ *   2) h3                 - scenario name, full card width to wrap into
+ *   3) chaos-card__target - target deployment code, full width
+ *
+ * Previously the pills sat in a sibling flex column on the right,
+ * which squeezed long titles (e.g. "SWIFT counterparty flap",
+ * "Sanctions cache disabled") into 3 short lines. Putting them on
+ * their own row trades one row of card height for an extra ~80px of
+ * usable title width, which is the right trade for a 5-up grid.
+ */
+.chaos-card__head {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.chaos-card__pills {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.chaos-card__head h3 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--nw-text);
+  line-height: 1.3;
+  /* Allow long target-service / scenario names to break sanely on
+   * narrow cards instead of overflowing the column. */
+  overflow-wrap: anywhere;
+}
+
+.chaos-card__target {
+  margin: 0;
+  font-size: 12px;
+  color: var(--nw-muted);
+}
+
+.chaos-card__target code {
+  background: var(--nw-purple-soft);
+  color: var(--nw-purple);
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  /* Same wrap rule as the title - service names are kebab-case and
+   * the dashes are valid break points. */
+  overflow-wrap: anywhere;
+}
+
+/* Severity + state pills inside the chaos cards.
+ *
+ * white-space: nowrap is the key bit - it guarantees the labels
+ * (MED / LOW / HIGH / CLEAR / ARMED / UNKNOWN) render on one line each
+ * even when the .chaos-card__pills row is squeezed near a narrow
+ * breakpoint. line-height: 1 keeps the pill vertically tight so the
+ * card header occupies fewer pixels of vertical room.
+ */
+.chaos-card__severity {
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  font-size: 9px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-weight: 700;
+  white-space: nowrap;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+}
+
+.chaos-card__severity--high {
+  background: #fde2e2;
+  color: #b00f23;
+}
+
+.chaos-card__severity--medium {
+  background: #fff0d4;
+  color: #8a4d00;
+}
+
+.chaos-card__severity--low {
+  background: #e0eefe;
+  color: #1f4f8f;
+}
+
+/* Chaos-card status pills. Scoped to .chaos-card so we don't override
+ * the global .status-pill rule at the top of this file - that one is
+ * used everywhere else (Recent payments, Success card, RUM table,
+ * etc.) with a larger 12px font and the --ok/--warn/--error/--pending
+ * variants. Keeping these chaos-only overrides scoped prevents
+ * accidental shrinking app-wide.
+ */
+.chaos-card .status-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  white-space: nowrap;
+  line-height: 1;
+  gap: 0;
+  background: transparent;
+}
+
+.status-pill--armed {
+  background: #fff0d4;
+  color: #8a4d00;
+}
+
+.status-pill--clear {
+  background: var(--nw-ok-bg);
+  color: var(--nw-ok);
+}
+
+.status-pill--unknown {
+  background: #e9e6ef;
+  color: var(--nw-muted);
+}
+
+/* Title + info-icon row. Replaced the always-visible narrative <p>:
+ * the narrative now lives inside .chaos-card__tooltip and pops on
+ * hover/focus of the .chaos-card__info button next to the title. See
+ * the inline comment in Ops.tsx (ChaosCard render) for the rationale. */
+.chaos-card__title-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.chaos-card__title-row h3 {
+  margin: 0;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.chaos-card__info {
+  /* Reset button defaults so the icon doesn't look like a form button. */
+  appearance: none;
+  background: transparent;
+  border: 1px solid var(--nw-border);
+  color: var(--nw-purple);
+  font: inherit;
+  cursor: help;
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+  margin-top: 4px;
+  padding: 0;
+  line-height: 1;
+}
+
+.chaos-card__info:hover,
+.chaos-card__info:focus-visible {
+  outline: none;
+  border-color: var(--nw-purple);
+  background: rgba(99, 50, 156, 0.08);
+}
+
+.chaos-card__info-glyph {
+  font-size: 11px;
+  font-weight: 700;
+  font-family: Georgia, "Times New Roman", serif; /* serif "i" reads as info */
+  line-height: 1;
+}
+
+/* Tooltip popover. Hidden by default; revealed when the info button
+ * is hovered or focused (touch devices fall through :focus on tap).
+ * Positioned to the left of the icon so it doesn't get clipped by the
+ * card's right edge on narrow grids. */
+.chaos-card__tooltip {
+  display: none;
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 10;
+  width: max-content;
+  max-width: min(360px, 80vw);
+  padding: 10px 12px;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.45;
+  text-align: left;
+  white-space: normal;
+  color: var(--nw-text);
+  background: #ffffff;
+  border: 1px solid var(--nw-border);
+  border-left: 3px solid var(--nw-purple);
+  border-radius: 6px;
+  box-shadow: 0 6px 18px rgba(31, 17, 51, 0.12);
+  cursor: text;
+}
+
+.chaos-card__info:hover .chaos-card__tooltip,
+.chaos-card__info:focus .chaos-card__tooltip,
+.chaos-card__info:focus-visible .chaos-card__tooltip,
+.chaos-card__info:focus-within .chaos-card__tooltip {
+  display: block;
+}
+
+/* Orchestrator progress block. Only rendered when the catalog returns
+ * MeltdownRunner.status()-shaped observed payload (story scenarios).
+ * Sits between the narrative and the params/details block. */
+.chaos-card__progress {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  background: rgba(99, 50, 156, 0.06);
+  border-left: 3px solid var(--nw-purple);
+  border-radius: 6px;
+  padding: 8px 10px;
+  color: var(--nw-text);
+}
+
+.chaos-card__progress-line {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: baseline;
+}
+
+.chaos-card__progress-phase {
+  font-weight: 600;
+  color: var(--nw-purple);
+}
+
+.chaos-card__progress-timing {
+  color: var(--nw-muted);
+}
+
+.chaos-card__progress-total {
+  color: var(--nw-muted);
+  opacity: 0.85;
+}
+
+.chaos-card__progress-meta code {
+  background: rgba(0, 0, 0, 0.04);
+  padding: 1px 4px;
+  border-radius: 4px;
+  font-size: 11px;
+}
+
+.chaos-card__progress-error {
+  background: var(--nw-error-bg);
+  color: var(--nw-error);
+  border-left: 3px solid var(--nw-error);
+  border-radius: 4px;
+  padding: 6px 8px;
+  font-size: 12px;
+}
+
+.chaos-card__details {
+  font-size: 12px;
+  color: var(--nw-muted);
+  background: rgba(239, 234, 245, 0.4);
+  border-radius: 6px;
+  padding: 6px 10px;
+}
+
+.chaos-card__details summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--nw-purple);
+  font-size: 12px;
+}
+
+.chaos-card__details p {
+  margin: 6px 0 0;
+}
+
+.chaos-card__param {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+}
+
+.chaos-card__param select,
+.chaos-card__param input {
+  border: 1px solid var(--nw-border);
+  border-radius: 6px;
+  padding: 6px 10px;
+  font: inherit;
+}
+
+/* Footer block: Watch/recovery + actions, both glued to the bottom of
+ * the card via margin-top: auto on the wrapper. Cards with short
+ * narratives no longer leave Watch/recovery floating in whitespace -
+ * it now always sits as the row immediately above the Inject / Clear
+ * buttons (per the user request in chaos-dashboard plan, design
+ * iteration #3). */
+.chaos-card__footer {
+  margin-top: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.chaos-card__actions {
+  display: flex;
+  gap: 10px;
+}
+
+.chaos-card__actions .btn-primary,
+.chaos-card__actions .btn-secondary {
+  flex: 1;
+}
+
+.chaos-card__error {
+  background: var(--nw-error-bg);
+  color: var(--nw-error);
+  border-left: 3px solid var(--nw-error);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 12px;
+}
+
+/* Confirmation modal (infra-outage scenarios). */
+.chaos-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.chaos-modal__backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(11, 18, 32, 0.55);
+  backdrop-filter: blur(2px);
+}
+
+.chaos-modal__panel {
+  position: relative;
+  z-index: 1;
+  background: white;
+  border-radius: var(--nw-radius);
+  padding: 24px 28px;
+  width: min(520px, 90vw);
+  box-shadow: 0 18px 36px rgba(0, 0, 0, 0.32);
+  border-top: 4px solid var(--nw-error);
+}
+
+.chaos-modal__panel h2 {
+  margin: 0 0 8px;
+  font-size: 18px;
+  color: var(--nw-error);
+}
+
+.chaos-modal__lead {
+  margin: 0 0 12px;
+  font-size: 14px;
+  color: var(--nw-text);
+}
+
+.chaos-modal__list {
+  margin: 0 0 18px;
+  padding-left: 16px;
+  font-size: 13px;
+  color: var(--nw-muted);
+}
+
+.chaos-modal__list code {
+  font-size: 12px;
+  background: var(--nw-purple-soft);
+  color: var(--nw-purple);
+  padding: 1px 6px;
+  border-radius: 4px;
+}
+
+.chaos-modal__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.chaos-modal__confirm {
+  background: var(--nw-error);
+}
+
+.chaos-modal__confirm:hover:not(:disabled) {
+  background: #a30b25;
+}
+
+/* PresenterHUD armed-scenario row. */
+.presenter-hud__armed {
+  font-size: 12px;
+  color: var(--nw-warn);
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+/* Responsive cascade for the chaos grid.
+ *
+ *   ≥ 1500px   5 columns (the default in .chaos-grid; ~460px/card at
+ *              the 2400px max-width, ~280px/card at 1500px)
+ *   1180-1499  4 columns (24" desktops, half-screen 32")
+ *   880-1179   3 columns (laptops, narrow externals)
+ *   660-879    2 columns (tablets)
+ *   < 660px    1 column  (phones / mobile-channel iframe)
+ *
+ * Bound to viewport width rather than container queries because the
+ * ops-page already constrains itself with max-width:2400px - the
+ * container is always the viewport up to that ceiling. */
+@media (max-width: 1499px) {
+  .chaos-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 1179px) {
+  .chaos-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 879px) {
+  .chaos-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 720px) {
+  .ops-page {
+    padding: 16px 18px 48px;
+  }
+  .ops-banner {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .ops-banner__actions {
+    width: 100%;
+    justify-content: space-between;
+  }
+}
+
+@media (max-width: 659px) {
+  .chaos-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* --- Cora AI assistant widget (Send Money page) ------------------- */
+.cora-root {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 12px;
+}
+.cora-launcher {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: none;
+  border-radius: 999px;
+  padding: 10px 18px 10px 10px;
+  background: var(--nw-purple);
+  color: #fff;
+  font-weight: 600;
+  font-size: 0.95rem;
+  cursor: pointer;
+  box-shadow: 0 6px 18px rgba(63, 28, 90, 0.35);
+}
+.cora-launcher:hover { background: var(--nw-purple-dark); }
+.cora-launcher:focus-visible { outline: 3px solid var(--nw-accent); outline-offset: 2px; }
+.cora-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--nw-accent);
+  color: var(--nw-purple-dark);
+  font-weight: 700;
+}
+.cora-panel {
+  width: min(360px, calc(100vw - 32px));
+  background: var(--nw-surface);
+  border: 1px solid var(--nw-border);
+  border-radius: var(--nw-radius);
+  box-shadow: 0 16px 40px rgba(28, 28, 28, 0.25);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.cora-panel__header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  background: var(--nw-purple);
+  color: #fff;
+}
+.cora-panel__title { display: flex; flex-direction: column; line-height: 1.2; }
+.cora-panel__title span { font-size: 0.75rem; opacity: 0.85; }
+.cora-close {
+  margin-left: auto;
+  border: none;
+  background: none;
+  color: #fff;
+  font-size: 1.4rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 6px;
+}
+.cora-close:focus-visible { outline: 2px solid var(--nw-accent); }
+.cora-thread {
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow-y: auto;
+  max-height: 320px;
+  min-height: 160px;
+  background: var(--nw-bg);
+}
+.cora-msg {
+  max-width: 85%;
+  padding: 9px 12px;
+  border-radius: 14px;
+  font-size: 0.9rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+.cora-msg--cora {
+  align-self: flex-start;
+  background: var(--nw-surface);
+  border: 1px solid var(--nw-border);
+  border-bottom-left-radius: 4px;
+}
+.cora-msg--user {
+  align-self: flex-end;
+  background: var(--nw-purple);
+  color: #fff;
+  border-bottom-right-radius: 4px;
+}
+.cora-msg--degraded { border-color: var(--nw-warn); }
+.cora-msg--typing { display: inline-flex; gap: 4px; padding: 12px 14px; }
+.cora-msg--typing span {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--nw-muted);
+  animation: cora-bounce 1.2s infinite ease-in-out;
+}
+.cora-msg--typing span:nth-child(2) { animation-delay: 0.15s; }
+.cora-msg--typing span:nth-child(3) { animation-delay: 0.3s; }
+@keyframes cora-bounce {
+  0%, 60%, 100% { transform: translateY(0); opacity: 0.5; }
+  30% { transform: translateY(-4px); opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cora-msg--typing span { animation: none; }
+}
+.cora-input {
+  display: flex;
+  gap: 8px;
+  padding: 10px 12px;
+  border-top: 1px solid var(--nw-border);
+  background: var(--nw-surface);
+}
+.cora-input input {
+  flex: 1;
+  border: 1px solid var(--nw-border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 0.9rem;
+}
+.cora-input button { padding: 8px 14px; }
+.cora-demo-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px 10px;
+  background: var(--nw-surface);
+  color: var(--nw-muted);
+  font-size: 0.75rem;
+  cursor: pointer;
+  user-select: none;
+}
+
+/* --- Cora AI traffic presenter control (Ops page) ------------------ */
+.cora-traffic__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.cora-traffic__pill {
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: var(--nw-border);
+  color: var(--nw-muted);
+}
+.cora-traffic__pill--on {
+  background: var(--nw-ok-bg);
+  color: var(--nw-ok);
+}
+.cora-traffic__desc {
+  font-size: 0.85rem;
+  color: var(--nw-muted);
+  margin: 8px 0 12px;
+}
+.cora-traffic__error {
+  color: var(--nw-error);
+  font-size: 0.85rem;
+}

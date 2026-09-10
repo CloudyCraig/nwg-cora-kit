@@ -1,0 +1,147 @@
+{{- if .Values.infrastructure.heartbeat.enabled }}
+{{- $cronSched := .Values.infrastructure.heartbeat.schedule | default "* * * * *" -}}
+---
+# infra-heartbeat - emits one synthetic OTLP/HTTP span every 60s for each of
+# redis, postgres, and kafka. The Splunk Observability APM service map shows
+# a node as "inferred" (greyed-out database / queue icon) when it only sees
+# the *client* side of a db.system / messaging.system span. The moment a
+# span arrives with `service.name = redis` (or postgres / kafka) the node
+# is promoted to a full first-class service entry, gaining the Logs and
+# Related Content tabs and proper "View metrics" navigation.
+#
+# This CronJob is the cheapest possible way to drive that promotion without
+# adding language SDKs to the brokers themselves. The spans are short
+# (no children, no work) so they don't pollute APM percentile charts -
+# they're filtered out implicitly by the existing dashboards which scope
+# to operations on the actual application services.
+#
+# Span shape:
+#   * service.name           = redis | postgres | kafka
+#   * deployment.environment = {{ .Values.otel.environment }}
+#   * span.kind              = SERVER (kind=2)
+#   * span.name              = "heartbeat"
+#   * duration               = 1ms (start_time + 1_000_000 ns)
+#
+# OTLP target is the local node's collector agent (DaemonSet) on
+# $(NODE_IP):4318/v1/traces, the same endpoint application pods use.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: infra-heartbeat
+  namespace: {{ .Values.namespace }}
+  labels:
+    app.kubernetes.io/name: infra-heartbeat
+    app.kubernetes.io/component: instrumentation
+    app.kubernetes.io/part-of: natwest-payments
+    app.kubernetes.io/managed-by: Helm
+spec:
+  schedule: {{ $cronSched | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 2
+  startingDeadlineSeconds: 60
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      ttlSecondsAfterFinished: 300
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: infra-heartbeat
+            app.kubernetes.io/part-of: natwest-payments
+        spec:
+          restartPolicy: Never
+          serviceAccountName: {{ .Values.serviceAccount.name }}
+          automountServiceAccountToken: false
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65534
+            runAsGroup: 65534
+            fsGroup: 65534
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: heartbeat
+              image: {{ .Values.infrastructure.heartbeat.image | quote }}
+              imagePullPolicy: IfNotPresent
+              env:
+                - name: NODE_IP
+                  valueFrom:
+                    fieldRef:
+                      fieldPath: status.hostIP
+                - name: OTLP_ENDPOINT
+                  value: "http://$(NODE_IP):{{ .Values.otel.otlpHttpPort }}/v1/traces"
+                - name: DEPLOYMENT_ENV
+                  value: {{ .Values.otel.environment | quote }}
+                - name: K8S_CLUSTER
+                  value: {{ .Values.otel.deployment | quote }}
+              command: ["/bin/sh", "-c"]
+              args:
+                - |
+                  set -eu
+                  rand_hex() {
+                    # Read N bytes from urandom and hex-encode. Avoids xxd
+                    # which isn't in alpine's busybox by default.
+                    head -c "$1" /dev/urandom | od -An -tx1 | tr -d ' \n'
+                  }
+                  emit_span() {
+                    SVC="$1"
+                    TRACE_ID="$(rand_hex 16)"
+                    SPAN_ID="$(rand_hex 8)"
+                    NOW_NS="$(date +%s)000000000"
+                    END_NS="$((NOW_NS + 1000000))"   # +1ms
+                    PAYLOAD=$(cat <<EOF
+                  {
+                    "resourceSpans": [{
+                      "resource": {
+                        "attributes": [
+                          {"key":"service.name","value":{"stringValue":"$SVC"}},
+                          {"key":"service.namespace","value":{"stringValue":"natwest-payments"}},
+                          {"key":"deployment.environment","value":{"stringValue":"$DEPLOYMENT_ENV"}},
+                          {"key":"k8s.cluster.name","value":{"stringValue":"$K8S_CLUSTER"}},
+                          {"key":"telemetry.sdk.name","value":{"stringValue":"infra-heartbeat"}}
+                        ]
+                      },
+                      "scopeSpans": [{
+                        "scope": {"name":"natwest.infra-heartbeat","version":"1.0.0"},
+                        "spans": [{
+                          "traceId":"$TRACE_ID",
+                          "spanId":"$SPAN_ID",
+                          "name":"heartbeat",
+                          "kind":2,
+                          "startTimeUnixNano":"$NOW_NS",
+                          "endTimeUnixNano":"$END_NS",
+                          "attributes":[
+                            {"key":"heartbeat.target","value":{"stringValue":"$SVC"}}
+                          ],
+                          "status":{"code":1}
+                        }]
+                      }]
+                    }]
+                  }
+                  EOF
+                  )
+                    echo "POST $OTLP_ENDPOINT for service.name=$SVC"
+                    # -fsS: fail on HTTP error, silent except on error.
+                    # --max-time 5: don't hang the CronJob if collector flakes.
+                    echo "$PAYLOAD" | curl -fsS --max-time 5 \
+                      -H 'Content-Type: application/json' \
+                      --data-binary @- \
+                      "$OTLP_ENDPOINT" || echo "warn: heartbeat for $SVC failed (non-fatal)"
+                  }
+                  emit_span redis
+                  emit_span postgres
+                  emit_span kafka
+              resources:
+                requests:
+                  cpu: "10m"
+                  memory: "16Mi"
+                limits:
+                  cpu: "100m"
+                  memory: "64Mi"
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+{{- end }}

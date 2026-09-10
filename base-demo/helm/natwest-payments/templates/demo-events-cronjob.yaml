@@ -1,0 +1,320 @@
+{{- if .Values.demoEvents.enabled }}
+{{- $sched := .Values.demoEvents.schedule | default "*/2 * * * *" -}}
+---
+# Synthetic demo-events emitter.
+#
+# Single CronJob that produces realistic events for the panels added in
+# the Tier 3 / 4 / 5 push:
+#
+#   * nwpay:deploy        - one deploy record per run, randomised
+#                           outcome (success / rolled_back / failed) so
+#                           the DORA panels (deploy frequency, change-
+#                           failure rate, lead time, MTTR) always have
+#                           data.
+#   * nwpay:atm_status    - one record per simulated ATM in the
+#                           NatWest physical estate. The ATM count and
+#                           outage probability are tunable via values.
+#                           Drives the "Branch & ATM estate uptime"
+#                           tile.
+#   * nwpay:tpp_request   - one record per simulated PSD2-AISP/PISP
+#                           Open Banking TPP request. Drives the "Open
+#                           Banking TPP volume" tile.
+#   * nwpay:finops        - one record per run capturing synthetic
+#                           Splunk-spend-per-million-payments numbers.
+#
+# Why one pod instead of three:
+#   The Splunk OTel collector routes container logs by per-container
+#   annotation (splunk.com/sourcetype.<container>), so the *pod* annotation
+#   is enough as long as we encode the routing decision inside the JSON
+#   payload via event_type and rely on a single sourcetype. That gives
+#   us one image, one CronJob, one place to tune cadence.
+#
+# The `event_type` field is the discriminator each glass-table panel
+# filters on (e.g. `event_type="deploy"`).
+#
+# All randomisation uses /dev/urandom via shell arithmetic; no Python
+# image needed. Keeps the pod tiny.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: demo-events-emitter
+  namespace: {{ .Values.namespace }}
+  labels:
+    app.kubernetes.io/name: demo-events-emitter
+    app.kubernetes.io/component: instrumentation
+    app.kubernetes.io/part-of: natwest-payments
+    app.kubernetes.io/managed-by: Helm
+spec:
+  schedule: {{ $sched | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 2
+  startingDeadlineSeconds: 60
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      ttlSecondsAfterFinished: 300
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: demo-events-emitter
+            app.kubernetes.io/part-of: natwest-payments
+          # Per-pod routing into the nwpay_audit Splunk index. Reusing
+          # the audit index keeps all "synthetic banking story" events
+          # together, scoped to a distinct sourcetype so panels can
+          # filter cheaply.
+          annotations:
+            splunk.com/index: "nwpay_audit"
+            splunk.com/sourcetype: "nwpay:demo_event"
+        spec:
+          restartPolicy: Never
+          serviceAccountName: {{ .Values.serviceAccount.name }}
+          automountServiceAccountToken: false
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65534
+            runAsGroup: 65534
+            fsGroup: 65534
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: emitter
+              image: {{ .Values.demoEvents.image | quote }}
+              imagePullPolicy: IfNotPresent
+              env:
+                - name: DEMO_ENV
+                  value: {{ .Values.otel.environment | quote }}
+                - name: K8S_CLUSTER
+                  value: {{ .Values.otel.deployment | quote }}
+                - name: ATM_COUNT
+                  value: {{ .Values.demoEvents.atmCount | default 240 | quote }}
+                - name: ATM_OUTAGE_PERMILLE
+                  value: {{ .Values.demoEvents.atmOutagePermille | default 8 | quote }}
+                - name: TPP_NAMES
+                  value: {{ .Values.demoEvents.tppNames | default "TrueLayer,Plaid,Yapily,Tink,Token" | quote }}
+                - name: DEPLOY_ROLLBACK_PERMILLE
+                  value: {{ .Values.demoEvents.deployRollbackPermille | default 80 | quote }}
+                - name: DEPLOY_FAIL_PERMILLE
+                  value: {{ .Values.demoEvents.deployFailPermille | default 30 | quote }}
+              command: ["/bin/sh", "-c"]
+              args:
+                - |
+                  set -eu
+
+                  # ----- helpers -----
+                  rand_int() {
+                    # rand_int <max> -> uniform int in [0, max-1]
+                    # busybox shell can't do $RANDOM reliably, so read
+                    # 2 bytes from /dev/urandom and modulo.
+                    local max="$1"
+                    local n
+                    n=$(od -An -N2 -tu2 /dev/urandom | tr -d ' \n')
+                    echo $(( n % max ))
+                  }
+                  rand_hex() {
+                    head -c "$1" /dev/urandom | od -An -tx1 | tr -d ' \n'
+                  }
+                  iso_now() {
+                    date -u +%Y-%m-%dT%H:%M:%SZ
+                  }
+                  emit() {
+                    # JSON-encode the rest of the args as one record.
+                    # Each arg is "key=value"; values with spaces must
+                    # be quoted in the call site, no embedded quotes.
+                    local out='{"@timestamp":"'"$(iso_now)"'","environment":"'"$DEMO_ENV"'","cluster":"'"$K8S_CLUSTER"'"'
+                    for kv in "$@"; do
+                      key="${kv%%=*}"
+                      val="${kv#*=}"
+                      # Numeric heuristic: if val is all digits, emit unquoted.
+                      case "$val" in
+                        ''|*[!0-9]*) out="$out,\"$key\":\"$val\"" ;;
+                        *)           out="$out,\"$key\":$val" ;;
+                      esac
+                    done
+                    out="$out}"
+                    echo "$out"
+                  }
+
+                  # ----- 1. deploy event -----
+                  # Outcome distribution (default: 89.2% success, 8% rollback,
+                  # 3% fail). Tunable via DEPLOY_*_PERMILLE for the chaos
+                  # catalogue narrative.
+                  d=$(rand_int 1000)
+                  if [ "$d" -lt "$DEPLOY_FAIL_PERMILLE" ]; then
+                    outcome=failed
+                  elif [ "$d" -lt $((DEPLOY_FAIL_PERMILLE + DEPLOY_ROLLBACK_PERMILLE)) ]; then
+                    outcome=rolled_back
+                  else
+                    outcome=success
+                  fi
+                  # Pick a service from the topology (must mirror the
+                  # services map in values.yaml; trimmed to the user-
+                  # facing ones).
+                  svc_idx=$(rand_int 9)
+                  case $svc_idx in
+                    0) service=api-gateway ;;
+                    1) service=payment-initiation-service ;;
+                    2) service=payment-validation-service ;;
+                    3) service=fraud-detection-service ;;
+                    4) service=sanctions-aml-service ;;
+                    5) service=ledger-service ;;
+                    6) service=settlement-service ;;
+                    7) service=swift-network ;;
+                    *) service=customer-profile-service ;;
+                  esac
+                  patch=$(rand_int 30)
+                  lead_time_min=$(( $(rand_int 180) + 15 ))
+                  duration_s=$(( $(rand_int 240) + 60 ))
+                  emit \
+                    event_type=deploy \
+                    service="$service" \
+                    version="0.1.$patch" \
+                    deploy_id="dep-$(rand_hex 6)" \
+                    outcome="$outcome" \
+                    lead_time_minutes="$lead_time_min" \
+                    duration_seconds="$duration_s" \
+                    actor="ci-bot"
+
+                  # ----- 2. ATM estate status -----
+                  # Emit one event per ATM. ATM_COUNT defaults to 240
+                  # which roughly matches NatWest's branch-ATM count
+                  # in a major UK city, kept low enough to not spam
+                  # the indexer (240 events / 2 minutes = 2 EPS).
+                  i=0
+                  while [ "$i" -lt "$ATM_COUNT" ]; do
+                    aid=$(printf 'atm-%04d' "$i")
+                    # Status weighting: <ATM_OUTAGE_PERMILLE> / 1000
+                    # are degraded/down; the rest are healthy.
+                    s=$(rand_int 1000)
+                    if [ "$s" -lt "$ATM_OUTAGE_PERMILLE" ]; then
+                      half=$((ATM_OUTAGE_PERMILLE / 2))
+                      if [ "$s" -lt "$half" ]; then
+                        status=down
+                      else
+                        status=degraded
+                      fi
+                    else
+                      status=healthy
+                    fi
+                    region_idx=$(( i % 5 ))
+                    case $region_idx in
+                      0) region=London ;;
+                      1) region=Manchester ;;
+                      2) region=Edinburgh ;;
+                      3) region=Birmingham ;;
+                      *) region=Bristol ;;
+                    esac
+                    emit \
+                      event_type=atm_status \
+                      atm_id="$aid" \
+                      region="$region" \
+                      status="$status"
+                    i=$((i + 1))
+                  done
+
+                  # ----- 3. Open Banking TPP requests -----
+                  # 1-5 PSD2 TPP requests per run. Names pulled from
+                  # TPP_NAMES (comma-separated). 95% success, 4%
+                  # rejected for consent, 1% throttled.
+                  IFS=,; set -- $TPP_NAMES; tpp_count=$#; unset IFS
+                  count=$(( $(rand_int 5) + 1 ))
+                  j=0
+                  while [ "$j" -lt "$count" ]; do
+                    tpp_idx=$(rand_int "$tpp_count")
+                    n=0
+                    for tpp in $(echo "$TPP_NAMES" | tr ',' ' '); do
+                      if [ "$n" -eq "$tpp_idx" ]; then
+                        tpp_name="$tpp"
+                        break
+                      fi
+                      n=$((n + 1))
+                    done
+                    flow_idx=$(rand_int 2)
+                    if [ "$flow_idx" -eq 0 ]; then
+                      flow=AISP
+                    else
+                      flow=PISP
+                    fi
+                    o=$(rand_int 100)
+                    if [ "$o" -lt 95 ]; then
+                      tpp_outcome=success
+                    elif [ "$o" -lt 99 ]; then
+                      tpp_outcome=consent_rejected
+                    else
+                      tpp_outcome=throttled
+                    fi
+                    amt=$(( $(rand_int 49500) + 500 ))
+                    emit \
+                      event_type=tpp_request \
+                      tpp_name="$tpp_name" \
+                      flow="$flow" \
+                      outcome="$tpp_outcome" \
+                      amount_minor_units="$amt" \
+                      currency="GBP"
+                    j=$((j + 1))
+                  done
+
+                  # ----- 3b. Real TPP payment fan-out into api-gateway -----
+                  # 1-2 of the simulated TPP requests above are actually
+                  # POSTed to the api-gateway so they show up in APM
+                  # traces with channel=tpp and tpp.name=<partner>. This
+                  # gives the demo a real "Open Banking partner X just
+                  # initiated a payment" trail in Splunk Observability,
+                  # not just a synthetic counter.
+                  if command -v wget >/dev/null 2>&1; then
+                    real_count=$(( $(rand_int 2) + 1 ))
+                    k=0
+                    while [ "$k" -lt "$real_count" ]; do
+                      tpp_idx=$(rand_int "$tpp_count")
+                      n=0
+                      for tpp in $(echo "$TPP_NAMES" | tr ',' ' '); do
+                        if [ "$n" -eq "$tpp_idx" ]; then
+                          tpp_name="$tpp"
+                          break
+                        fi
+                        n=$((n + 1))
+                      done
+                      pid="pay-tpp-$(rand_hex 6)"
+                      amt=$(( $(rand_int 49500) + 500 ))
+                      body='{"payment_id":"'"$pid"'","scheme":"FPS","amount_minor_units":'"$amt"',"currency":"GBP","debtor_country":"GB","creditor_country":"GB","channel":"tpp","tpp_name":"'"$tpp_name"'","customer_id":"cust-tpp-001","customer_tier":"silver"}'
+                      # busybox wget supports --post-data + --header.
+                      # Quiet+timeout so a backend hiccup never breaks
+                      # the cron job.
+                      wget -q -T 5 -O- \
+                        --header="Content-Type: application/json" \
+                        --header="X-TPP-Name: $tpp_name" \
+                        --post-data="$body" \
+                        "http://api-gateway.{{ .Values.namespace }}.svc.cluster.local:8080/process" \
+                        >/dev/null 2>&1 || true
+                      k=$((k + 1))
+                    done
+                  fi
+
+                  # ----- 4. FinOps cost record -----
+                  # Synthetic Splunk-spend-per-million-payments. This
+                  # only ever needs to be a stable number for the
+                  # demo (banks expect a real bill, not real-time
+                  # billing on a dashboard). We jitter ~ +/- 5% so
+                  # the panel doesn't look static.
+                  base=185
+                  jitter=$(( $(rand_int 21) - 10 ))
+                  spend=$(( base + jitter ))
+                  payments_estimate=$(( 950000 + $(rand_int 100000) ))
+                  emit \
+                    event_type=finops \
+                    spend_gbp_per_million_payments="$spend" \
+                    payments_last_24h="$payments_estimate" \
+                    splunk_ingest_gb_last_24h="$(( 28 + $(rand_int 8) ))"
+              resources:
+                requests:
+                  cpu: "10m"
+                  memory: "16Mi"
+                limits:
+                  cpu: "100m"
+                  memory: "64Mi"
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+{{- end }}

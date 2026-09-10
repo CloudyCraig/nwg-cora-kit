@@ -1,0 +1,26 @@
+{
+  "name": "natwest-payments-web",
+  "private": true,
+  "version": "0.5.0",
+  "type": "module",
+  "description": "Demo retail-bank payments UI - Splunk RUM browser SDK initialised at boot, fetch instrumentation auto-propagates W3C traceparent into the api-gateway so the browser session links into the APM trace.",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@splunk/otel-web": "2.5.1",
+    "@splunk/otel-web-session-recorder": "2.5.1",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "react-router-dom": "6.27.0"
+  },
+  "devDependencies": {
+    "@types/react": "18.3.12",
+    "@types/react-dom": "18.3.1",
+    "@vitejs/plugin-react": "4.3.3",
+    "typescript": "5.6.3",
+    "vite": "5.4.10"
+  }
+}

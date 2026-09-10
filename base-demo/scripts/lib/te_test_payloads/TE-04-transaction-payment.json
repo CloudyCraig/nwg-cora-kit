@@ -1,0 +1,21 @@
+{
+  "<<REDACTED-TOKEN>>",
+  "description": "Real-browser Selenium-style transaction that scripts the full customer journey: log in, send a payment, look it up. The headline test for 'a customer can actually pay end-to-end', not just 'the page renders'. Drives the top-tier Digital Customer Experience KPI in ITSI.",
+  "type": "web-transactions",
+  "interval": 900,
+  "url": "${DEMO_BASE_URL}/",
+  "httpTimeLimit": 15,
+  "pageLoadTimeLimit": 20,
+  "transactionTimeLimit": 60,
+  "verifyCertificate": true,
+  "followRedirects": true,
+  "networkMeasurements": true,
+  "mtuMeasurements": false,
+  "bandwidthMeasurements": false,
+  "bgpMeasurements": true,
+  "pathTraceMode": "in-session",
+  "probeMode": "auto",
+  "agents": ${AGENTS_2},
+  "transactionScript": "import { By, until } from 'selenium-webdriver';\nimport { driver, credentials, transaction, test, assert } from 'thousandeyes';\n\nrunScript();\n\nasync function runScript() {\n  const baseUrl = '${DEMO_BASE_URL}';\n\n  // 1. SPA login page.\n  await transaction.start('open-spa-login');\n  await driver.get(baseUrl + '/login');\n  const usernameInput = await driver.wait(until.elementLocated(By.css('input[name=username]')), 15000);\n  await transaction.end();\n\n  // 2. Submit credentials.\n  await transaction.start('login');\n  const passwordInput = await driver.findElement(By.css('input[name=password]'));\n  await usernameInput.sendKeys(credentials.get('TE_TX_USERNAME').value);\n  await passwordInput.sendKeys(credentials.get('TE_TX_PASSWORD').value);\n  await driver.findElement(By.xpath(\"//button[normalize-space()='Sign in' or normalize-space()='Log in' or @type='submit']\")).click();\n  // After login the SPA bounces to '/' which renders SendMoney.\n  await driver.wait(until.elementLocated(By.css('button.primary[type=submit]')), 15000);\n  await transaction.end();\n\n  // 3. Submit a synthetic FPS GBP payment.\n  await transaction.start('submit-payment');\n  // Force amount to a known value. The 'Amount (minor units)' is the only\n  // numeric input on the SendMoney form.\n  const amountInput = await driver.findElement(By.css(\"input[type=number]\"));\n  await amountInput.clear();\n  await amountInput.sendKeys('4200');\n  await driver.findElement(By.css('button.primary[type=submit]')).click();\n  // Confirmation appears in a div with class 'status-line ok' containing\n  // the JSON response (we parse the payment_id out of it).\n  const okEl = await driver.wait(until.elementLocated(By.css('.status-line.ok')), 30000);\n  const okText = await okEl.getText();\n  const idMatch = okText.match(/\"payment_id\"\\s*:\\s*\"([^\"]+)\"/);\n  assert.ok(idMatch && idMatch[1], 'payment_id missing from /process response');\n  const paymentId = idMatch[1];\n  test.log('payment_id: ' + paymentId);\n  await transaction.end();\n\n  // 4. Recent payments page renders the payment in the gateway list.\n  await transaction.start('open-recent-payments');\n  await driver.get(baseUrl + '/recent');\n  await driver.wait(until.elementLocated(By.css('table')), 15000);\n  await transaction.end();\n\n  // 5. Look up the payment_id on the Payment status page.\n  await transaction.start('lookup-payment-status');\n  await driver.get(baseUrl + '/status');\n  // The Payment status page has a single text input + Look up button.\n  const lookupInput = await driver.wait(until.elementLocated(By.css('input[type=text]')), 10000);\n  await lookupInput.sendKeys(paymentId);\n  await driver.findElement(By.xpath(\"//button[normalize-space()='Look up' or @type='submit']\")).click();\n  // The /status response is rendered into a <pre>, so wait until it appears\n  // with the matching payment_id.\n  await driver.wait(async () => {\n    const els = await driver.findElements(By.css('pre, .status-line'));\n    for (const el of els) {\n      const text = await el.getText();\n      if (text.indexOf(paymentId) !== -1 && (text.indexOf('\"accepted\"') !== -1 || text.indexOf('\"partial\"') !== -1)) {\n        return true;\n      }\n    }\n    return false;\n  }, 15000, 'never saw accepted/partial status for ' + paymentId);\n  await transaction.end();\n}\n",
+  "alertsEnabled": true
+}

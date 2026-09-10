@@ -1,0 +1,53 @@
+server:
+  port: ${PORT:8080}
+  shutdown: graceful
+
+spring:
+  application:
+    name: ${OTEL_SERVICE_NAME:ledger-service}
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://postgres.natwest.svc.cluster.local:5432/ledger}
+    username: ${SPRING_DATASOURCE_USERNAME:ledger}
+    password: ${SPRING_DATASOURCE_PASSWORD:ledger-demo-pass}
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      maximum-pool-size: 16
+      minimum-idle: 2
+      connection-timeout: 3000
+  jpa:
+    hibernate:
+      ddl-auto: none
+    properties:
+      hibernate.dialect: org.hibernate.dialect.PostgreSQLDialect
+      hibernate.jdbc.lob.non_contextual_creation: true
+    open-in-view: false
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: always
+      probes:
+        enabled: true
+  health:
+    livenessstate:
+      enabled: true
+    readinessstate:
+      enabled: true
+
+logging:
+  pattern:
+    console: '{"timestamp":"%d{yyyy-MM-dd''T''HH:mm:ss.SSS''Z''}","level":"%p","service":"${OTEL_SERVICE_NAME:ledger-service}","logger":"%c{1.}","trace_id":"%X{trace_id}","span_id":"%X{span_id}","message":"%replace(%m){''\"'',''\\\"''}"}%n'
+
+ledger:
+  serviceName: ${OTEL_SERVICE_NAME:ledger-service}
+  serviceTier: ${SERVICE_TIER:ledger}
+  errorRate: ${ERROR_RATE:0.005}
+  latencyMsMean: ${LATENCY_MS_MEAN:30}
+  latencyMsStddev: ${LATENCY_MS_STDDEV:10}
+  dbLatencyMs: ${DB_LATENCY_MS:0}
+  downstreams: ${DOWNSTREAMS:}
+  downstreamPort: ${DOWNSTREAM_PORT:8080}

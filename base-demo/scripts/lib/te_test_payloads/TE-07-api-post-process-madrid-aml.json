@@ -1,0 +1,26 @@
+{
+  "<<REDACTED-TOKEN>> (Madrid AML synthetic)",
+  "description": "Synthetic POST of an ES/Madrid payment to the api-gateway, exercising the sanctions-aml-service path. Unlike TE-05 (a GB payment), this body carries customer_country=ES so it degrades for REAL under the 'madrid-payment-degradation' chaos scenario, which arms SLOW_LOCATION_* on sanctions-aml-service (~2s latency + RegionalDependencyError 5xx for ES). Feeds the 'AML synthetic latency p95 (ThousandEyes)' KPI on the sanctions-aml-service ITSI service. Bound to the metrics (path-vis) stream's testMatch. Added during engagement handover (cgorman).",
+  "type": "http-server",
+  "interval": 120,
+  "url": "${DEMO_BASE_URL}/api/process",
+  "httpVersion": 2,
+  "httpTimeLimit": 10,
+  "verifyCertificate": true,
+  "followRedirects": false,
+  "networkMeasurements": true,
+  "mtuMeasurements": false,
+  "bandwidthMeasurements": false,
+  "bgpMeasurements": false,
+  "pathTraceMode": "in-session",
+  "probeMode": "auto",
+  "requestMethod": 1,
+  "postBody": "{\"payment_id\":\"te-aml-madrid-${TE_TEST_RANDOM}\",\"scheme\":\"FPS\",\"amount_minor_units\":12500,\"currency\":\"GBP\",\"debtor_country\":\"GB\",\"creditor_country\":\"GB\",\"channel\":\"web\",\"customer_id\":\"thousandeyes-aml-synthetic\",\"customer_tier\":\"standard\",\"customer_location\":\"madrid\",\"customer_country\":\"ES\"}",
+  "headers": [
+    "Content-Type: application/json"
+  ],
+  "desiredStatusCode": "200",
+  "contentRegex": "\"status\"\\s*:\\s*\"(accepted|partial)\"",
+  "agents": ${AGENTS_3},
+  "alertsEnabled": true
+}

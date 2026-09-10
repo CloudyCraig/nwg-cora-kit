@@ -1,0 +1,26 @@
+{
+  "<<REDACTED-TOKEN>>",
+  "description": "Direct synthetic POST to the api-gateway. Exercises the same write path traffic-gen does, but from a known external location, so we can graph backend-write availability and tail latency separately from the browser-load story.",
+  "type": "http-server",
+  "interval": 300,
+  "url": "${DEMO_BASE_URL}/api/process",
+  "httpVersion": 2,
+  "httpTimeLimit": 10,
+  "verifyCertificate": true,
+  "followRedirects": false,
+  "networkMeasurements": true,
+  "mtuMeasurements": false,
+  "bandwidthMeasurements": false,
+  "bgpMeasurements": false,
+  "pathTraceMode": "in-session",
+  "probeMode": "auto",
+  "requestMethod": 1,
+  "postBody": "{\"payment_id\":\"te-synth-${TE_TEST_RANDOM}\",\"scheme\":\"FPS\",\"amount_minor_units\":4200,\"currency\":\"GBP\",\"debtor_country\":\"GB\",\"creditor_country\":\"GB\",\"channel\":\"web\",\"customer_id\":\"thousandeyes-synthetic\",\"customer_tier\":\"silver\"}",
+  "headers": [
+    "Content-Type: application/json"
+  ],
+  "desiredStatusCode": "200",
+  "contentRegex": "\"status\"\\s*:\\s*\"(accepted|partial)\"",
+  "agents": ${AGENTS_3},
+  "alertsEnabled": true
+}

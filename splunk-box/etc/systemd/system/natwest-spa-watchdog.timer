@@ -1,0 +1,15 @@
+[Unit]
+Description=NatWest SPA public proxy watchdog (30s cadence)
+
+[Timer]
+# Wait 60 s after boot before the first probe so nginx has time to come
+# up, then run every 30 s. Persistent=true would replay missed runs on
+# resume; we explicitly do NOT want that (a 5-min nap shouldn't queue 10
+# restart attempts on wake).
+OnBootSec=60s
+OnUnitActiveSec=30s
+AccuracySec=1s
+Unit=natwest-spa-watchdog.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,33 @@
+apiVersion: eksctl.io/v1alpha5
+kind: ClusterConfig
+metadata:
+  name: nwg-demo
+  region: eu-west-1
+  version: "1.30"
+  tags: { splunk-demo: NWG-demo }
+vpc:
+  id: vpc-4c85aa29
+  subnets:
+    # Private, NAT-backed subnets (nat-0c51aa9093cb8ff9f) — the proven egress path
+    # used by the working wp-demo-eks nodes. The default VPC subnets have NO route
+    # to any gateway, so nodes there boot but cannot reach the EKS API to register.
+    private:
+      eu-west-1a: { id: subnet-0ef87dd4a95f404c4 }
+      eu-west-1b: { id: subnet-0585cb2008ed56560 }
+managedNodeGroups:
+  - name: ng-nwg
+    instanceType: t3.xlarge
+    desiredCapacity: 2
+    minSize: 2
+    maxSize: 3
+    volumeSize: 40
+    privateNetworking: true
+    subnets:
+      - subnet-0ef87dd4a95f404c4
+      - subnet-0585cb2008ed56560
+    # splunkit_* tags are REQUIRED by the account SCP on RunInstances (proven by wp-demo-eks)
+    tags:
+      splunkit_environment_type: non-prd
+      splunkit_data_classification: public
+      splunk-demo: NWG-demo
+    labels: { workload: nwg-demo }

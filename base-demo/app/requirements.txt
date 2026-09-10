@@ -1,0 +1,10 @@
+flask==3.0.3
+requests==2.32.3
+gunicorn==23.0.0
+redis==5.0.8
+# kafka-python 2.0.2 still imports `from kafka.vendor.six.moves import range`
+# but its bundled vendored `six` was dropped in CPython 3.12+ packaging, so we
+# pin the maintained fork that re-vendors six inline. See
+# kafka-python: advertised listeners / broker discovery quirks — check upstream release notes if upgrading.
+kafka-python-ng==2.2.3
+splunk-opentelemetry[all]==2.0.0

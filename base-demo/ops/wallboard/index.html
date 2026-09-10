@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>NatWest Payments — Command Center</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { background:#0b0e14; color:#e8ecf3; font-family:"Helvetica Neue",Helvetica,Arial,sans-serif; overflow:hidden; height:100vh; display:flex; flex-direction:column; }
+  header { display:flex; align-items:baseline; gap:18px; padding:22px 34px 8px; }
+  header .brand { font-weight:800; font-size:22px; letter-spacing:1px; }
+  header .brand b { color:#ed0080; }
+  header .sub { color:#7d8698; font-size:13px; letter-spacing:2px; text-transform:uppercase; }
+  header .clock { margin-left:auto; color:#5b6474; font-size:13px; font-variant-numeric:tabular-nums; }
+  #alert { display:none; margin:0 34px; padding:10px 18px; border-radius:8px; background:#3a1220; border:1px solid #e0554e;
+           color:#ff9d97; font-size:14px; font-weight:600; letter-spacing:.5px; }
+  #kpis { display:grid; grid-template-columns:repeat(5,1fr); gap:14px; padding:16px 34px; }
+  .kpi { background:#121826; border:1px solid #1e2637; border-radius:12px; padding:14px 18px; }
+  .kpi .label { color:#8b94a8; font-size:11px; letter-spacing:1.6px; text-transform:uppercase; }
+  .kpi .value { font-size:40px; font-weight:800; margin-top:4px; font-variant-numeric:tabular-nums; }
+  .kpi .unit { font-size:16px; color:#7d8698; font-weight:400; }
+  .g { color:#3fd67a; } .a { color:#f2b02e; } .r { color:#ff5c5c; } .n { color:#e8ecf3; }
+  #flow { flex:1; margin:4px 34px 10px; position:relative; }
+  canvas { width:100%; height:100%; display:block; }
+  footer { display:flex; gap:26px; padding:0 34px 16px; color:#5b6474; font-size:12px; }
+  footer .cities { display:flex; gap:16px; }
+  footer .cities span b { color:#aab3c5; font-variant-numeric:tabular-nums; }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">splunk<b>&gt;</b>&nbsp; NatWest Payments</div>
+  <div class="sub">Command Center · live platform flow</div>
+  <div class="clock" id="clock"></div>
+</header>
+<div id="alert"></div>
+<div id="kpis"></div>
+<div id="flow"><canvas id="cv"></canvas></div>
+<footer>
+  <div>p95 by city:</div><div class="cities" id="cities"></div>
+</footer>
+<script>
+const NODES = [
+  {key:"customer",  label:"CUSTOMER",   sub:"web & mobile", fixed:true},
+  {key:"experience",label:"EXPERIENCE", sub:"natwest SPA"},
+  {key:"gateway",   label:"GATEWAY",    sub:"api-gateway"},
+  {key:"initiation",label:"INITIATION", sub:"payment-initiation"},
+  {key:"validation",label:"VALIDATION", sub:"payment-validation"},
+  {key:"screening", label:"SCREENING",  sub:"sanctions / AML"},
+  {key:"rails",     label:"RAILS",      sub:"FPS · SEPA · CHAPS"},
+  {key:"ledger",    label:"LEDGER",     sub:"ledger-service"},
+  {key:"settlement",label:"SETTLEMENT", sub:"settlement"},
+];
+let DATA = {kpis:{}, health:{}, cities:{}, journeys_min:0, decline_pct:0};
+let particles = [];
+const cv = document.getElementById("cv"), ctx = cv.getContext("2d");
+
+function healthColor(h){
+  if (h === null || h === undefined) return "#3a4356";
+  if (h >= 90) return "#3fd67a";
+  if (h >= 70) return "#f2b02e";
+  if (h >= 40) return "#f2762e";
+  return "#ff5c5c";
+}
+function kpiClass(v, warn, bad, invert){
+  if (v === undefined || v === null) return "n";
+  if (invert) return v >= warn ? "g" : v >= bad ? "a" : "r";
+  return v <= warn ? "g" : v <= bad ? "a" : "r";
+}
+function renderKpis(d){
+  const k = [
+    ["Journeys / min", d.journeys_min, "", "n"],
+    ["Madrid p95", d.madrid_p95_ms, "ms", kpiClass(d.madrid_p95_ms, 800, 2000)],
+    ["Decline rate", d.decline_pct, "%", kpiClass(d.decline_pct, 2, 8)],
+    ["Conversion", d.conversion_pct, "%", kpiClass(d.conversion_pct, 90, 75, true)],
+    ["p99 latency", d.p99_ms, "ms", kpiClass(d.p99_ms, 1500, 3000)],
+  ];
+  document.getElementById("kpis").innerHTML = k.map(([l, v, u, c]) =>
+    `<div class="kpi"><div class="label">${l}</div><div class="value ${c}">${v ?? "–"}<span class="unit"> ${u}</span></div></div>`).join("");
+  const scr = (d.health || {}).screening, byloc = (d.health || {}).by_location;
+  const bad = (scr !== null && scr !== undefined && scr < 70) || d.decline_pct > 10 || d.madrid_p95_ms > 2000;
+  const el = document.getElementById("alert");
+  if (bad) {
+    el.style.display = "block";
+    el.textContent = "⚠  MADRID DEGRADED — sanctions screening impacted · declines " +
+      (d.decline_pct ?? "?") + "% · Madrid p95 " + (d.madrid_p95_ms ?? "?") + "ms" +
+      (byloc !== null && byloc !== undefined ? " · Payments-by-Location health " + Math.round(byloc) : "");
+  } else el.style.display = "none";
+  document.getElementById("cities").innerHTML = Object.entries(d.cities || {})
+    .sort((a, b) => b[1] - a[1]).slice(0, 8)
+    .map(([c, v]) => `<span>${c} <b>${v}ms</b></span>`).join("");
+}
+async function fetchData(){
+  try {
+    const r = await fetch("data.json", {cache:"no-store"});
+    DATA = await r.json();
+    renderKpis(DATA);
+  } catch (e) { /* keep last */ }
+}
+function resize(){
+  cv.width = cv.clientWidth * devicePixelRatio;
+  cv.height = cv.clientHeight * devicePixelRatio;
+  ctx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
+}
+window.addEventListener("resize", resize);
+
+let spawnAcc = 0, last = performance.now();
+function tick(now){
+  const dt = Math.min(0.1, (now - last) / 1000); last = now;
+  const W = cv.clientWidth, H = cv.clientHeight, y = H * 0.42;
+  const xs = NODES.map((_, i) => 60 + i * (W - 120) / (NODES.length - 1));
+  ctx.clearRect(0, 0, W, H);
+
+  // spine
+  ctx.strokeStyle = "#232c3f"; ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.moveTo(xs[0], y); ctx.lineTo(xs[xs.length-1], y); ctx.stroke();
+
+  // spawn particles: visual rate scaled from journeys/min
+  const rate = Math.min(28, Math.max(3, (DATA.journeys_min || 60) / 20));
+  spawnAcc += rate * dt;
+  while (spawnAcc >= 1) {
+    spawnAcc -= 1;
+    particles.push({x: xs[0], declined: Math.random()*100 < (DATA.decline_pct || 0), dy: 0, dead: false});
+  }
+  const scrX = xs[NODES.findIndex(n => n.key === "screening")];
+  const speed = (W - 120) / 9;  // ~9s to cross
+  for (const p of particles) {
+    if (p.declined && p.x >= scrX) { p.dy += 90 * dt; p.x += speed * 0.25 * dt; }
+    else p.x += speed * dt;
+    if (p.x > xs[xs.length-1] || p.dy > H * 0.45) p.dead = true;
+  }
+  particles = particles.filter(p => !p.dead);
+  for (const p of particles) {
+    ctx.beginPath();
+    ctx.fillStyle = p.declined && p.x >= scrX - 8 ? "#ff5c5c" : "#7c6bff";
+    ctx.globalAlpha = p.declined && p.x >= scrX ? Math.max(0, 1 - p.dy / (H*0.4)) : 0.9;
+    ctx.arc(p.x, y + p.dy, 3.2, 0, 7);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+
+  // nodes
+  const t = now / 1000;
+  NODES.forEach((n, i) => {
+    const h = n.fixed ? undefined : (DATA.health || {})[n.key];
+    const col = n.fixed ? "#7c6bff" : healthColor(h);
+    const unhealthy = h !== null && h !== undefined && h < 70;
+    const r = 15 + (unhealthy ? 3 * (1 + Math.sin(t * 5)) : 0);
+    if (unhealthy) {
+      ctx.beginPath(); ctx.fillStyle = col; ctx.globalAlpha = 0.18;
+      ctx.arc(xs[i], y, r + 14, 0, 7); ctx.fill(); ctx.globalAlpha = 1;
+    }
+    ctx.beginPath(); ctx.fillStyle = "#121826"; ctx.strokeStyle = col; ctx.lineWidth = 2.5;
+    ctx.arc(xs[i], y, r, 0, 7); ctx.fill(); ctx.stroke();
+    if (h !== null && h !== undefined) {
+      ctx.fillStyle = col; ctx.font = "600 11px Helvetica"; ctx.textAlign = "center";
+      ctx.fillText(Math.round(h), xs[i], y + 4);
+    }
+    ctx.fillStyle = "#e8ecf3"; ctx.font = "700 13px Helvetica"; ctx.textAlign = "center";
+    ctx.fillText(n.label, xs[i], y + 44);
+    ctx.fillStyle = "#7d8698"; ctx.font = "11px Helvetica";
+    ctx.fillText(n.sub, xs[i], y + 60);
+  });
+
+  // declined label under screening
+  if ((DATA.decline_pct || 0) > 0.5) {
+    ctx.fillStyle = "#ff5c5c"; ctx.font = "600 12px Helvetica"; ctx.textAlign = "center";
+    ctx.fillText("declined " + DATA.decline_pct + "%", scrX, y + H * 0.34);
+  }
+  requestAnimationFrame(tick);
+}
+function clock(){ document.getElementById("clock").textContent = new Date().toLocaleString("en-GB"); }
+resize(); fetchData(); clock();
+setInterval(fetchData, 10000); setInterval(clock, 1000);
+requestAnimationFrame(tick);
+</script>
+</body>
+</html>

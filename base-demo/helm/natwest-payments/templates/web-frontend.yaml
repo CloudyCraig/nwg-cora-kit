@@ -1,0 +1,268 @@
+{{- if .Values.frontend.enabled }}
+{{- $svcPort := .Values.frontend.service.port | default 80 -}}
+{{- $targetPort := .Values.frontend.service.targetPort | default 8080 -}}
+{{- $imageRepo := .Values.frontend.image.repository | required "frontend.image.repository is required when frontend.enabled=true" -}}
+{{- $imageTag := .Values.frontend.image.tag | default "0.1.0" -}}
+{{- $imagePullPolicy := .Values.frontend.image.pullPolicy | default "IfNotPresent" -}}
+{{- $rumRealm := .Values.frontend.rum.realm | default "us0" -}}
+{{- $rumToken := .Values.frontend.rum.accessToken | default "" -}}
+{{- $appName := .Values.frontend.rum.applicationName | default "natwest-payments-web" -}}
+{{- $deploymentEnv := .Values.frontend.rum.deploymentEnvironment | default "demo" -}}
+{{- $gatewayUrl := .Values.frontend.gatewayUrl | default "/api" -}}
+{{/*
+  ---- Cross-launch URLs ----
+  Operators set these in values.yaml (or via --set on `helm upgrade`) to
+  surface "Observability" and "ITSI" links in the SPA top-nav. Empty
+  string means "hide the link". Defaults to empty so a stock deployment
+  that hasn't decided on a tenant URL never ships a 404-able shortcut.
+*/}}
+{{- $observabilityUrl := .Values.frontend.observabilityUrl | default "" -}}
+{{- $itsiUrl := .Values.frontend.itsiUrl | default "" -}}
+{{- $thousandEyesUrl := .Values.frontend.thousandEyesUrl | default "" -}}
+{{/*
+  ---- Auth (demo gate) ----
+  Two ways to provide the password:
+    1. frontend.auth.passwordSha256  (preferred - already-hashed via
+       `printf '%s' "$pw" | shasum -a 256` outside the chart)
+    2. frontend.auth.password        (fallback - chart hashes via sha256sum)
+  The chart never echoes the plaintext to a manifest; passwordSha256 is the
+  only value that ends up in the rendered Secret. Plaintext stays in env
+  variables on the operator's shell.
+*/}}
+{{- $authEnabled := .Values.frontend.auth.enabled | default false -}}
+{{- $authUsername := .Values.frontend.auth.username | default "admin" -}}
+{{- $authProvidedHash := .Values.frontend.auth.passwordSha256 | default "" -}}
+{{- $authProvidedPlain := .Values.frontend.auth.password | default "" -}}
+{{- $authHash := "" -}}
+{{- if $authProvidedHash -}}
+  {{- $authHash = $authProvidedHash -}}
+{{- else if $authProvidedPlain -}}
+  {{- $authHash = sha256sum $authProvidedPlain -}}
+{{- end -}}
+{{- if and $authEnabled (not $authHash) -}}
+{{- fail "frontend.auth.enabled=true requires frontend.auth.passwordSha256 (or frontend.auth.password). Set one via --set at deploy time; do NOT commit a password to values.yaml." -}}
+{{- end -}}
+---
+# Secret holding the Splunk RUM access token AND the SHA-256 of the demo
+# login password. Mounted as env vars into web-frontend so the runtime
+# entrypoint can substitute them into /usr/share/nginx/html/config.js.
+# Kept separate from the main collector token so that RUM token rotation
+# doesn't cascade into the collector DaemonSet.
+#
+# AUTH_PASSWORD_SHA256 is a hash, not a plaintext. The plaintext never
+# reaches Kubernetes - the operator passes it via Helm --set, the chart
+# hashes once at render time, and only the digest lands in the Secret.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: web-frontend-rum
+  namespace: {{ .Values.namespace }}
+  labels:
+    app.kubernetes.io/name: web-frontend
+    app.kubernetes.io/part-of: natwest-payments
+type: Opaque
+stringData:
+  RUM_ACCESS_TOKEN: {{ $rumToken | quote }}
+  AUTH_PASSWORD_SHA256: {{ $authHash | quote }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web-frontend
+  namespace: {{ .Values.namespace }}
+  labels:
+    app.kubernetes.io/name: web-frontend
+    app.kubernetes.io/component: frontend
+    app.kubernetes.io/part-of: natwest-payments
+    app.kubernetes.io/managed-by: Helm
+spec:
+  replicas: {{ .Values.frontend.replicas | default 1 }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: web-frontend
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: web-frontend
+        app.kubernetes.io/component: frontend
+        app.kubernetes.io/part-of: natwest-payments
+      annotations:
+        # Splunk OTel collector chart: route web-frontend container logs
+        # to nwpay_infra/nginx:access. nginx writes to stdout in the
+        # JSON format defined in frontend/nginx/log_format.conf. error
+        # log lines are intermixed with access lines on the same stream;
+        # the cloud-init props.conf for nginx:access uses
+        # INDEXED_EXTRACTIONS=json which silently no-ops on non-JSON
+        # records, so the error lines still index, just without parsed
+        # fields.
+        splunk.com/index: "nwpay_infra"
+        splunk.com/sourcetype: "nginx:access"
+        {{- if (.Values.chaosController).enabled }}
+        # Force a rolling restart when the chaos-controller-token Secret
+        # changes. secretKeyRef env vars are fixed at pod start; without
+        # this annotation a helm upgrade that rotates the presenter token
+        # leaves web-frontend serving a stale /config.js chaosToken and the
+        # /ops dashboard gets 401 from chaos-controller.
+        {{- $chaosSecret := lookup "v1" "Secret" .Values.namespace "chaos-controller-token" }}
+        checksum/chaos-controller-token: {{ if $chaosSecret }}{{ index $chaosSecret.data "CHAOS_PRESENTER_TOKEN" | default "" }}{{ else }}{{ (.Values.chaosController).presenterToken | sha256sum }}{{ end }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ .Values.serviceAccount.name }}
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        # nginx:alpine ships with worker user `nginx` (uid 101); fsGroup
+        # ensures the writable cache and conf.d paths are group-readable.
+        runAsUser: 101
+        runAsGroup: 101
+        fsGroup: 101
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: web
+          image: "{{ $imageRepo }}:{{ $imageTag }}"
+          imagePullPolicy: {{ $imagePullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ $targetPort }}
+              protocol: TCP
+          env:
+            - name: RUM_REALM
+              value: {{ $rumRealm | quote }}
+            - name: RUM_ACCESS_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: web-frontend-rum
+                  key: RUM_ACCESS_TOKEN
+            - name: APP_NAME
+              value: {{ $appName | quote }}
+            - name: DEPLOYMENT_ENVIRONMENT
+              value: {{ $deploymentEnv | quote }}
+            - name: GATEWAY_URL
+              value: {{ $gatewayUrl | quote }}
+            - name: KUBERNETES_NAMESPACE
+              value: {{ .Values.namespace | quote }}
+            # Auth gate. AUTH_ENABLED is a JS literal ("true" / "false")
+            # consumed verbatim by the config.js template, so we render it
+            # as a quoted string here even though the SPA expects an
+            # unquoted boolean. The entrypoint script normalises the value.
+            - name: AUTH_ENABLED
+              value: {{ ternary "true" "false" $authEnabled | quote }}
+            - name: AUTH_USERNAME
+              value: {{ $authUsername | quote }}
+            - name: AUTH_PASSWORD_SHA256
+              valueFrom:
+                secretKeyRef:
+                  name: web-frontend-rum
+                  key: AUTH_PASSWORD_SHA256
+            # Cross-launch deep links rendered into /config.js at boot
+            # by docker-entrypoint.sh and consumed by App.tsx. Always
+            # exported (rather than conditionally set) so that a
+            # `helm upgrade --reuse-values` from a release that pre-dates
+            # these keys still produces a valid container env: the
+            # entrypoint defaults them to empty and the SPA hides the
+            # link. Operators flip them on by setting
+            # frontend.observabilityUrl / frontend.itsiUrl in values.
+            - name: OBSERVABILITY_URL
+              value: {{ $observabilityUrl | quote }}
+            - name: ITSI_URL
+              value: {{ $itsiUrl | quote }}
+            - name: THOUSANDEYES_URL
+              value: {{ $thousandEyesUrl | quote }}
+            {{- if (.Values.chaosController).enabled }}
+            # Chaos dashboard plumbing. Same-origin /chaos/api/* in the
+            # nginx template proxies here; the SPA pulls the presenter
+            # token from /config.js (rendered with CHAOS_PRESENTER_TOKEN)
+            # and sends it on the X-Chaos-Token header. The token comes
+            # from the chart-managed chaos-controller-token Secret so
+            # the plaintext never enters this container's pod spec.
+            #
+            # Nil-safe lookup via parentheses: when `helm upgrade
+            # --reuse-values` is run against a release that predates the
+            # chaosController values block, .Values.chaosController is
+            # nil; the parenthesised access short-circuits to nil rather
+            # than panicking on map access.
+            - name: CHAOS_CONTROLLER_HOST
+              value: "chaos-controller.{{ .Values.namespace }}.svc.cluster.local"
+            - name: CHAOS_CONTROLLER_PORT
+              value: "{{ ((.Values.chaosController).service).port | default 8080 }}"
+            - name: CHAOS_PRESENTER_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: chaos-controller-token
+                  key: CHAOS_PRESENTER_TOKEN
+            {{- end }}
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 2
+            periodSeconds: 5
+            timeoutSeconds: 3
+          resources:
+            requests:
+              cpu: "25m"
+              memory: "32Mi"
+            limits:
+              cpu: "200m"
+              memory: "128Mi"
+          securityContext:
+            allowPrivilegeEscalation: false
+            # nginx writes pid + temp files at runtime, hence rootfs cannot
+            # be read-only. Writable scratch volumes are mounted explicitly
+            # below to limit the writable surface area.
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            # nginx writes rendered config + temp files at boot. The
+            # static asset tree at /usr/share/nginx/html is intentionally
+            # *not* overlaid so the build-time html/JS bundle is served
+            # as-is; only ephemeral state lives on writable scratch.
+            - name: nginx-conf
+              mountPath: /etc/nginx/conf.d
+            - name: nginx-cache
+              mountPath: /var/cache/nginx
+            - name: nginx-run
+              mountPath: /var/run
+      volumes:
+        - name: nginx-conf
+          emptyDir: {}
+        - name: nginx-cache
+          emptyDir: {}
+        - name: nginx-run
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: web-frontend
+  namespace: {{ .Values.namespace }}
+  labels:
+    app.kubernetes.io/name: web-frontend
+    app.kubernetes.io/component: frontend
+    app.kubernetes.io/part-of: natwest-payments
+  {{- with .Values.frontend.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.frontend.service.type | default "LoadBalancer" }}
+  selector:
+    app.kubernetes.io/name: web-frontend
+  ports:
+    - name: http
+      port: {{ $svcPort }}
+      targetPort: http
+      protocol: TCP
+      {{- if and (eq (.Values.frontend.service.type | default "LoadBalancer") "NodePort") .Values.frontend.service.nodePort }}
+      nodePort: {{ .Values.frontend.service.nodePort }}
+      {{- end }}
+{{- end }}

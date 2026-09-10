@@ -1,0 +1,359 @@
+{{- if .Values.infrastructure.postgres.enabled }}
+{{- $port := .Values.infrastructure.postgres.port | default 5432 -}}
+{{- $exporterPort := .Values.infrastructure.postgres.exporter.port | default 9187 -}}
+{{- $monUser := .Values.infrastructure.postgres.monitoringUser.username | default "payments_exporter" -}}
+{{- $monPass := .Values.infrastructure.postgres.monitoringUser.password | default "pg-exporter-demo-pass" -}}
+---
+# Postgres - backing store for ledger-service (Java Spring Boot). Splunk APM
+# auto-detects the JDBC client spans (db.system=postgresql) and renders Postgres
+# as a service node, giving the demo a full "service -> DB" topology.
+#
+# Uses the official `postgres:16-alpine` image (the values.yaml comment block
+# explains why we don't use bitnami). POSTGRES_USER / POSTGRES_PASSWORD /
+# POSTGRES_DB drive the upstream entrypoint. Initial schema + monitoring-role
+# bootstrap live in the postgres-initdb ConfigMap, mounted at
+# /docker-entrypoint-initdb.d so psql replays them once on first boot.
+#
+# Instrumentation:
+#   * pg_stat_statements is preloaded via `command: postgres -c
+#     shared_preload_libraries=pg_stat_statements ...` so postgres_exporter
+#     can pick up query-level metrics.
+#   * `payments_exporter` role is created by 02_monitoring.sql with the built-in
+#     pg_monitor role (read-only access to pg_stat_*, pg_locks, etc.). Its
+#     password comes from the postgres-monitoring Secret (overridden by
+#     scripts/00-provision.sh with a random value at install time).
+#   * postgres_exporter sidecar on :9187 connects via 127.0.0.1 using the
+#     monitoring role and exposes Prometheus metrics for the OTel collector
+#     to scrape.
+#
+# NOT FOR PRODUCTION: single replica, ephemeral emptyDir storage, demo
+# credentials sourced from chart-managed Secrets.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: postgres-credentials
+  namespace: {{ .Values.namespace }}
+  labels:
+    app.kubernetes.io/name: postgres
+    app.kubernetes.io/part-of: natwest-payments
+type: Opaque
+stringData:
+  POSTGRES_USER: {{ .Values.infrastructure.postgres.username | quote }}
+  POSTGRES_PASSWORD: {{ .Values.infrastructure.postgres.password | quote }}
+  POSTGRES_DB: {{ .Values.infrastructure.postgres.database | quote }}
+---
+# Read-only credentials for the postgres_exporter sidecar and any external
+# Prometheus-style scrapers. Keeping it separate from postgres-credentials
+# enforces least-privilege at the role layer (pg_monitor) and lets us rotate
+# the exporter password without redeploying ledger-service.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: postgres-monitoring
+  namespace: {{ .Values.namespace }}
+  labels:
+    app.kubernetes.io/name: postgres
+    app.kubernetes.io/part-of: natwest-payments
+type: Opaque
+stringData:
+  PG_EXPORTER_USER: {{ $monUser | quote }}
+  PG_EXPORTER_PASSWORD: {{ $monPass | quote }}
+  # DSN consumed directly by prometheuscommunity/postgres-exporter via
+  # DATA_SOURCE_NAME. sslmode=disable is fine here because traffic stays on
+  # the pod loopback.
+  DATA_SOURCE_NAME: {{ printf "postgresql://%s:%s@127.0.0.1:%d/%s?sslmode=disable" $monUser $monPass (int $port) (.Values.infrastructure.postgres.database) | quote }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-initdb
+  namespace: {{ .Values.namespace }}
+  labels:
+    app.kubernetes.io/name: postgres
+    app.kubernetes.io/part-of: natwest-payments
+data:
+  01_schema.sql: |
+    -- Ledger entries table - one row per debit/credit posted by ledger-service.
+    -- Indexed on account_id so the per-account SELECT SUM(amount) on each
+    -- /process call hits a covering index in the demo (and so we can
+    -- demonstrate a "missing index" pathology if we ever need to).
+    CREATE TABLE IF NOT EXISTS ledger_entries (
+      id              BIGSERIAL PRIMARY KEY,
+      payment_id      VARCHAR(64)  NOT NULL,
+      account_id      VARCHAR(32)  NOT NULL,
+      scheme          VARCHAR(16)  NOT NULL,
+      amount_minor    BIGINT       NOT NULL,
+      currency        VARCHAR(8)   NOT NULL,
+      direction       CHAR(1)      NOT NULL,
+      created_at      TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_ledger_entries_account
+      ON ledger_entries (account_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_ledger_entries_payment
+      ON ledger_entries (payment_id);
+  02_monitoring.sql: |
+    -- Read-only role used by postgres_exporter (sidecar on :9187) and any
+    -- external Prometheus-style scrapers. pg_monitor is a built-in role that
+    -- grants read access to pg_stat_*, pg_locks, pg_replication_slots and
+    -- the other observability views without permitting DML on application
+    -- tables. Wrapped in a DO block so a re-run of the initdb scripts
+    -- (rare, but possible after a fresh emptyDir) does not error.
+    DO $do$
+    BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '{{ $monUser }}') THEN
+        CREATE ROLE {{ $monUser }} LOGIN PASSWORD '{{ $monPass }}';
+      ELSE
+        ALTER ROLE {{ $monUser }} WITH LOGIN PASSWORD '{{ $monPass }}';
+      END IF;
+    END
+    $do$;
+    GRANT pg_monitor TO {{ $monUser }};
+    GRANT CONNECT ON DATABASE {{ .Values.infrastructure.postgres.database }} TO {{ $monUser }};
+  03_pg_stat_statements.sql: |
+    -- pg_stat_statements is preloaded via shared_preload_libraries (see the
+    -- container `command:` below). The matching extension still needs to be
+    -- created in each database we want to read stats from.
+    CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  namespace: {{ .Values.namespace }}
+  labels:
+    app.kubernetes.io/name: postgres
+    app.kubernetes.io/component: database
+    app.kubernetes.io/part-of: natwest-payments
+    app.kubernetes.io/managed-by: Helm
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: postgres
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: postgres
+        app.kubernetes.io/component: database
+        app.kubernetes.io/part-of: natwest-payments
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: {{ $exporterPort | quote }}
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: {{ .Values.serviceAccount.name }}
+      automountServiceAccountToken: false
+      # postgres:16-alpine runs as uid 70 (postgres user) by default. Setting
+      # fsGroup matches the data emptyDir to that uid so PGDATA writes succeed.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 70
+        runAsGroup: 70
+        fsGroup: 70
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: postgres
+          image: {{ .Values.infrastructure.postgres.image | quote }}
+          imagePullPolicy: IfNotPresent
+          # Override the default `postgres` command so we can preload
+          # pg_stat_statements (track query-level metrics that
+          # postgres_exporter exposes as pg_stat_statements_*). The upstream
+          # docker-entrypoint.sh checks for `[ "$1" = 'postgres' ]` and runs
+          # initdb when needed, so passing `postgres -c key=val` is supported.
+          command: ["docker-entrypoint.sh"]
+          args:
+            - "postgres"
+            - "-c"
+            - "shared_preload_libraries=pg_stat_statements"
+            - "-c"
+            - "pg_stat_statements.track=all"
+            - "-c"
+            - "pg_stat_statements.max=10000"
+            - "-c"
+            - "track_io_timing=on"
+            # Slow-query log: emit a stderr line for every statement that
+            # runs longer than 200 ms. Complements the OTel sqlquery
+            # receiver (collector/values.yaml `sqlquery/postgres`): the
+            # receiver gives 30s SNAPSHOTS of pg_stat_activity and 60s
+            # rollups of pg_stat_statements, while this knob gives every
+            # INDIVIDUAL slow execution with its full SQL text. Container
+            # stdout/stderr is collected by the splunk-otel-collector
+            # agent's filelog receiver and routed to
+            # `index=nwpay_infra sourcetype=postgresql` by
+            # `transform/infra_routing` in collector/values.yaml.
+            #
+            # 100 ms threshold: healthy ledger transactions land around 5-25 ms
+            # (Postgres-side). 100 ms is above normal but below the `db-slow`
+            # chaos injection (>= 500 ms), so steady state stays quiet and
+            # incidents produce stderr lines Splunk can triage.
+            - "-c"
+            - "log_min_duration_statement=100"
+            # Emit a log line every time a transaction has to wait on
+            # a lock for longer than `deadlock_timeout` (default 1s).
+            # Drives the lock-contention story when ledger-service
+            # transactions stack up during `db-slow`.
+            - "-c"
+            - "log_lock_waits=on"
+            # Connection lifecycle + DDL for demo forensics without
+            # log_statement=all volume explosion.
+            - "-c"
+            - "log_connections=on"
+            - "-c"
+            - "log_disconnections=on"
+            - "-c"
+            - "log_statement=ddl"
+            # Pin the log line prefix so Splunk Enterprise can parse the
+            # records with a single props.conf rule. `%t [%p] %q%u@%d`
+            # gives: timestamp, PID, then (only for client-attached
+            # backends, due to %q) user@db. This matches the default
+            # Splunk-shipped `postgres` props.conf TIME_FORMAT.
+            - "-c"
+            - "log_line_prefix=%t [%p] %q%u@%d "
+          ports:
+            - name: postgres
+              containerPort: {{ $port }}
+              protocol: TCP
+          envFrom:
+            - secretRef:
+                name: postgres-credentials
+          env:
+            # Force PGDATA into a subdirectory so the upstream entrypoint can
+            # chown/chmod it without fighting the volume's lost+found.
+            - name: PGDATA
+              value: "/var/lib/postgresql/data/pgdata"
+          livenessProbe:
+            tcpSocket:
+              port: postgres
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 5
+          readinessProbe:
+            exec:
+              command:
+                - "/bin/sh"
+                - "-c"
+                - "pg_isready -U $POSTGRES_USER -d $POSTGRES_DB -h 127.0.0.1 -p {{ $port }}"
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 12
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "192Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+          securityContext:
+            allowPrivilegeEscalation: false
+            # The official postgres entrypoint writes to /var/run/postgresql,
+            # /tmp, and PGDATA - we mount those as writable volumes and keep
+            # the rest of the rootfs read-only.
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+            - name: initdb
+              mountPath: /docker-entrypoint-initdb.d
+            - name: tmp
+              mountPath: /tmp
+            - name: run
+              mountPath: /var/run/postgresql
+        # ---------------- postgres_exporter sidecar ------------------------
+        # Connects to postgres on the pod loopback using the read-only
+        # payments_exporter role (created by 02_monitoring.sql). Exposes the
+        # standard pg_* metrics on :9187 for the Splunk OTel Collector's
+        # prometheus/infra receiver to scrape (see collector/values.yaml).
+        - name: postgres-exporter
+          image: {{ .Values.infrastructure.postgres.exporter.image | quote }}
+          imagePullPolicy: IfNotPresent
+          args:
+            - "--web.listen-address=:{{ $exporterPort }}"
+            - "--collector.stat_statements"
+            # long_running_transactions exposes
+            # `pg_long_running_transactions{}` (count of transactions
+            # running longer than the default 1m threshold). Used by
+            # the ITSI KPI "Postgres long-running txns" on
+            # nwpay_l4_postgres - this is the canary for stuck
+            # transactions / zombie ledger-service backends during the
+            # db-slow chaos, and it's a more actionable signal than the
+            # generic "idle in transaction" backend count because the
+            # exporter only flags transactions that have been holding
+            # locks for at least 60s.
+            #
+            # NOTE: postgres_exporter v0.15.0 does NOT have a
+            # --collector.stat_activity flag (the metric name we'd want,
+            # pg_stat_activity_count, only exists in pre-v0.13 versions).
+            # long_running_transactions is the modern replacement.
+            - "--collector.long_running_transactions"
+          envFrom:
+            - secretRef:
+                name: postgres-monitoring
+          ports:
+            - name: metrics
+              containerPort: {{ $exporterPort }}
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /
+              port: metrics
+            initialDelaySeconds: 30
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /
+              port: metrics
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: "10m"
+              memory: "32Mi"
+            limits:
+              cpu: "100m"
+              memory: "96Mi"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+      volumes:
+        - name: data
+          emptyDir: {}
+        - name: initdb
+          configMap:
+            name: postgres-initdb
+        - name: tmp
+          emptyDir: {}
+        - name: run
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: {{ .Values.namespace }}
+  labels:
+    app.kubernetes.io/name: postgres
+    app.kubernetes.io/component: database
+    app.kubernetes.io/part-of: natwest-payments
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: postgres
+  ports:
+    - name: postgres
+      port: {{ $port }}
+      targetPort: postgres
+      protocol: TCP
+    - name: metrics
+      port: {{ $exporterPort }}
+      targetPort: metrics
+      protocol: TCP
+{{- end }}

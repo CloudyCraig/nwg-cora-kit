@@ -1,0 +1,186 @@
+{{- /*
+  rum-user-simulator — Playwright browser sessions driving real per-city
+  RUM traffic against the SPA. Additive to the chart: no existing
+  resource is modified, and the whole subtree renders as a single empty
+  document when rumUserSimulator.enabled is false. That makes toggling
+  it off (`--set rumUserSimulator.enabled=false`) a clean removal.
+
+  The chaos-controller-token Secret must already exist in the namespace
+  (chaosController.enabled=true). If it isn't there, the Deployment will
+  fail to start with a CreateContainerConfigError — helm upgrade returns
+  the error and nothing else is disturbed.
+*/}}
+{{- if (.Values.rumUserSimulator).enabled }}
+{{- $sim := .Values.rumUserSimulator -}}
+{{- $imageRepo := $sim.image.repository | required "rumUserSimulator.image.repository is required when rumUserSimulator.enabled=true" -}}
+{{- $imageTag := $sim.image.tag | default "0.1.0" -}}
+{{- $imagePullPolicy := $sim.image.pullPolicy | default "IfNotPresent" -}}
+{{- $cadence := $sim.cadenceSeconds | default 30 -}}
+{{- $chaosPoll := $sim.chaosPollSeconds | default 5 -}}
+{{- $sessionBudget := $sim.sessionBudgetSeconds | default 25 -}}
+{{- $rageClicks := $sim.rageClickCount | default 7 -}}
+{{- $rageGap := $sim.rageClickGapMs | default 150 -}}
+{{- $spaUrl := $sim.spaUrl | default (printf "http://web-frontend.%s.svc.cluster.local" .Values.namespace) -}}
+{{- $chaosUrl := $sim.chaosUrl | default (printf "http://chaos-controller.%s.svc.cluster.local:%v" .Values.namespace (((.Values.chaosController).service).port | default 8080)) -}}
+{{- $cities := $sim.cities | default dict -}}
+{{- $madridCity := (index $cities "madrid") | default dict -}}
+{{- $londonCity := (index $cities "london") | default dict -}}
+{{- $frankfurtCity := (index $cities "frankfurt") | default dict -}}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rum-user-simulator
+  namespace: {{ .Values.namespace }}
+  labels:
+    app.kubernetes.io/name: rum-user-simulator
+    app.kubernetes.io/part-of: natwest-payments
+    app.kubernetes.io/component: traffic
+    app.kubernetes.io/managed-by: Helm
+spec:
+  replicas: {{ $sim.replicas | default 1 }}
+  # Recreate keeps the pod count at exactly `replicas` during rollout —
+  # avoids double-firing sessions in the RUM feed while an image bump is
+  # in flight, which would be visually confusing during a live demo.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: rum-user-simulator
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: rum-user-simulator
+        app.kubernetes.io/part-of: natwest-payments
+        app.kubernetes.io/component: traffic
+      annotations:
+        # Rolling restart when the chaos-controller-token Secret changes,
+        # mirroring web-frontend.yaml's checksum trick — the sim reads
+        # the token via env from that Secret, so rotating it without a
+        # restart would leave the sim polling with a stale bearer.
+        {{- $chaosSecret := lookup "v1" "Secret" .Values.namespace "chaos-controller-token" }}
+        checksum/chaos-controller-token: {{ if $chaosSecret }}{{ index $chaosSecret.data "CHAOS_PRESENTER_TOKEN" | default "" }}{{ else }}{{ ((.Values.chaosController).presenterToken | default "unset") | sha256sum }}{{ end }}
+    spec:
+      serviceAccountName: {{ .Values.serviceAccount.name }}
+      automountServiceAccountToken: false
+      securityContext:
+        # The Playwright image ships `pwuser` (uid/gid 1000). Drop into
+        # it so we never write to root-owned paths.
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: sim
+          image: "{{ $imageRepo }}:{{ $imageTag }}"
+          imagePullPolicy: {{ $imagePullPolicy }}
+          env:
+            - name: SPA_URL
+              value: {{ $spaUrl | quote }}
+            - name: CHAOS_URL
+              value: {{ $chaosUrl | quote }}
+            - name: CHAOS_PRESENTER_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: chaos-controller-token
+                  key: CHAOS_PRESENTER_TOKEN
+            - name: CADENCE_SECONDS
+              value: {{ $cadence | quote }}
+            - name: CHAOS_POLL_SECONDS
+              value: {{ $chaosPoll | quote }}
+            - name: SESSION_BUDGET_SECONDS
+              value: {{ $sessionBudget | quote }}
+            - name: RAGE_CLICK_COUNT
+              value: {{ $rageClicks | quote }}
+            - name: RAGE_CLICK_GAP_MS
+              value: {{ $rageGap | quote }}
+            - name: MADRID_CHAOS_SCENARIOS
+              value: {{ ($sim.madridChaosScenarios | default (list "madrid-payment-degradation" "madrid-network-degradation")) | join "," | quote }}
+            # Per-city enable flags + persona overrides. Each city block is
+            # optional in values.yaml — the container falls back to the
+            # defaults baked into lib/config.js when the env is unset.
+            - name: CITY_MADRID_ENABLED
+              value: {{ ($madridCity.enabled | default true) | ternary "true" "false" | quote }}
+            - name: MADRID_PERSONA_ID
+              value: {{ ($madridCity.personaId | default "cust-es-001") | quote }}
+            {{- with $madridCity.locationOverride }}
+            - name: MADRID_LOCATION_OVERRIDE
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with $madridCity.countryOverride }}
+            - name: MADRID_COUNTRY_OVERRIDE
+              value: {{ . | quote }}
+            {{- end }}
+            - name: CITY_LONDON_ENABLED
+              value: {{ ($londonCity.enabled | default true) | ternary "true" "false" | quote }}
+            - name: LONDON_PERSONA_ID
+              value: {{ ($londonCity.personaId | default "cust-uk-003") | quote }}
+            {{- with $londonCity.locationOverride }}
+            - name: LONDON_LOCATION_OVERRIDE
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with $londonCity.countryOverride }}
+            - name: LONDON_COUNTRY_OVERRIDE
+              value: {{ . | quote }}
+            {{- end }}
+            - name: CITY_FRANKFURT_ENABLED
+              value: {{ ($frankfurtCity.enabled | default true) | ternary "true" "false" | quote }}
+            - name: FRANKFURT_PERSONA_ID
+              value: {{ ($frankfurtCity.personaId | default "cust-de-001") | quote }}
+            {{- with $frankfurtCity.locationOverride }}
+            - name: FRANKFURT_LOCATION_OVERRIDE
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with $frankfurtCity.countryOverride }}
+            - name: FRANKFURT_COUNTRY_OVERRIDE
+              value: {{ . | quote }}
+            {{- end }}
+            - name: NODE_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.hostIP
+            # Route the sim's OWN OTel spans (if any — the sim itself is
+            # not OTel-instrumented today, but keeping the env means a
+            # future `opentelemetry-instrument`-style wrap gets picked
+            # up for free) to the node-local collector, same as every
+            # other workload in this chart.
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: "http://$(NODE_IP):4317"
+            - name: OTEL_RESOURCE_ATTRIBUTES
+              value: "deployment.environment=demo,service.namespace=natwest-payments,service.tier=traffic,service.region=europe"
+            - name: OTEL_SERVICE_NAME
+              value: "rum-user-simulator"
+          resources:
+            requests:
+              cpu: {{ ($sim.resources).requests.cpu | default "150m" | quote }}
+              memory: {{ ($sim.resources).requests.memory | default "384Mi" | quote }}
+            limits:
+              cpu: {{ ($sim.resources).limits.cpu | default "500m" | quote }}
+              memory: {{ ($sim.resources).limits.memory | default "1Gi" | quote }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            # Chromium needs a writable filesystem for its /tmp shm + cache.
+            # We keep the rootfs read-only and mount writable emptyDirs
+            # explicitly below, which is the same posture as web-frontend.
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: home-cache
+              mountPath: /home/pwuser/.cache
+      volumes:
+        # Chromium sandbox writes; also where playwright stores its
+        # per-launch profile if you set userDataDir (we don't — every
+        # context is throwaway, but the emptyDir means we can start
+        # doing so without another chart edit).
+        - name: tmp
+          emptyDir:
+            sizeLimit: "512Mi"
+        - name: home-cache
+          emptyDir:
+            sizeLimit: "256Mi"
+{{- end }}

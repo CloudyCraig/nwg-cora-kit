@@ -1,0 +1,56 @@
+# Prunes ledger_entries rows accumulated by the ThousandEyes synthetic
+# POST /api/process tests. Those tests bake a FIXED payment_id into their
+# postBody at creation time, so every probe (each ~2 min, 5 tests) inserts
+# more rows under the same id; the gateway's per-payment_id read path then
+# slows linearly with row count (~3.5s at ~7k rows, ~6s at ~29k). Root
+# cause of the 2026-07 "Payments by Location" ITSI degradation-at-idle.
+# Daily pruning caps each id at <1.5k rows => sub-second synthetic latency.
+#
+# Applied with kubectl (NOT helm) on 2026-07-13. Remove with:
+#   kubectl -n natwest delete cronjob te-ledger-cleanup
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: te-ledger-cleanup
+  namespace: natwest
+  labels:
+    app.kubernetes.io/name: te-ledger-cleanup
+    app.kubernetes.io/part-of: natwest-payments-demo
+spec:
+  schedule: "0 3 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 600
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: prune
+              image: postgres:16-alpine
+              env:
+                - name: PGHOST
+                  value: postgres.natwest.svc.cluster.local
+                - name: PGPORT
+                  value: "5432"
+                - name: PGDATABASE
+                  value: ledger
+                - name: PGUSER
+                  valueFrom:
+                    secretKeyRef: { name: postgres-credentials, key: POSTGRES_USER }
+                - name: PGPASSWORD
+                  valueFrom:
+                    secretKeyRef: { name: postgres-credentials, key: POSTGRES_PASSWORD }
+              command:
+                - psql
+                - -v
+                - ON_ERROR_STOP=1
+                - -c
+                - >-
+                  DELETE FROM ledger_entries
+                  WHERE payment_id LIKE 'te-aml-%'
+                     OR payment_id LIKE 'te-loc-%'
+                     OR payment_id LIKE 'te-synth-%';

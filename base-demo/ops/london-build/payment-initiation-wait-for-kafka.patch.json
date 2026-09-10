@@ -1,0 +1,11 @@
+{
+  "spec": { "template": { "spec": { "initContainers": [
+    {
+      "name": "wait-for-kafka",
+      "image": "busybox:1.36",
+      "command": ["sh","-c","until nc -z kafka.natwest.svc.cluster.local 9092; do echo 'waiting for kafka...'; sleep 3; done; echo kafka-ready"],
+      "securityContext": { "allowPrivilegeEscalation": false, "capabilities": { "drop": ["ALL"] }, "readOnlyRootFilesystem": true },
+      "resources": { "requests": { "cpu": "10m", "memory": "16Mi" }, "limits": { "cpu": "50m", "memory": "32Mi" } }
+    }
+  ] } } }
+}

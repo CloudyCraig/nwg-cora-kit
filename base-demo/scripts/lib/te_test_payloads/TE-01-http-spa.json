@@ -1,0 +1,19 @@
+{
+  "<<REDACTED-TOKEN>>",
+  "description": "Synthetic check that the customer-facing SPA login page is reachable and returns 200 < 3s. The cheapest, highest-frequency probe in the suite - the canary for 'is the bank reachable from anywhere on earth'.",
+  "type": "http-server",
+  "interval": 120,
+  "url": "${DEMO_BASE_URL}/",
+  "httpVersion": 2,
+  "httpTimeLimit": 5,
+  "verifyCertificate": true,
+  "followRedirects": true,
+  "networkMeasurements": true,
+  "mtuMeasurements": true,
+  "bandwidthMeasurements": false,
+  "bgpMeasurements": false,
+  "pathTraceMode": "in-session",
+  "probeMode": "auto",
+  "agents": ${AGENTS_5},
+  "alertsEnabled": true
+}

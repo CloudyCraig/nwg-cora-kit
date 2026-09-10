@@ -1,0 +1,201 @@
+{{- if (.Values.chaosController).enabled }}
+{{- $imageRepo := .Values.chaosController.image.repository | required "chaosController.image.repository is required when chaosController.enabled=true" -}}
+{{- $imageTag := .Values.chaosController.image.tag | default "0.1.0" -}}
+{{- $imagePullPolicy := .Values.chaosController.image.pullPolicy | default "IfNotPresent" -}}
+{{- $svcPort := .Values.chaosController.service.port | default 8080 -}}
+{{- $killable := join "," .Values.chaosController.killable_services -}}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: chaos-controller
+  namespace: {{ .Values.namespace }}
+  labels:
+    app.kubernetes.io/name: chaos-controller
+    app.kubernetes.io/component: chaos-controller
+    app.kubernetes.io/part-of: natwest-payments
+    app.kubernetes.io/managed-by: Helm
+spec:
+  replicas: {{ .Values.chaosController.replicas | default 1 }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: chaos-controller
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: chaos-controller
+        app.kubernetes.io/component: chaos-controller
+        app.kubernetes.io/part-of: natwest-payments
+      annotations:
+        # Route chaos-controller stdout through the OTel collector to
+        # nwpay_infra so HEC + audit warnings show up in the demo's
+        # operational view rather than the payment-audit index.
+        splunk.com/sourcetype: "chaos:controller"
+        splunk.com/index: "nwpay_infra"
+    spec:
+      serviceAccountName: chaos-controller
+      # We DO need the SA token mounted (kubernetes.config.load_incluster_config
+      # reads /var/run/secrets/kubernetes.io/serviceaccount/{token,ca.crt}).
+      automountServiceAccountToken: true
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: controller
+          image: "{{ $imageRepo }}:{{ $imageTag }}"
+          imagePullPolicy: {{ $imagePullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ $svcPort }}
+              protocol: TCP
+          env:
+            - name: PORT
+              value: {{ $svcPort | quote }}
+            - name: NAMESPACE
+              value: {{ .Values.namespace | quote }}
+            - name: KILLABLE_SERVICES
+              value: {{ $killable | quote }}
+            # Token is mounted as a file (CHAOS_PRESENTER_TOKEN_PATH);
+            # auth.py reads it at request time, never logs the value.
+            - name: CHAOS_PRESENTER_TOKEN_PATH
+              value: /var/run/chaos-controller/CHAOS_PRESENTER_TOKEN
+            # HEC config for chaos-controller/app/audit.py. Sourced
+            # from the chaos-controller-token Secret rendered by
+            # chaos-controller-secret.yaml. Audit events land in
+            # nwpay_audit with the same shape scripts/incident.sh
+            # produces, so existing SIEM correlation searches keep
+            # firing without modification.
+            - name: SPLUNK_HEC_ENDPOINT
+              valueFrom:
+                secretKeyRef:
+                  name: chaos-controller-token
+                  key: SPLUNK_HEC_ENDPOINT
+            - name: SPLUNK_HEC_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: chaos-controller-token
+                  key: SPLUNK_HEC_TOKEN
+            - name: SPLUNK_HEC_INDEX
+              valueFrom:
+                secretKeyRef:
+                  name: chaos-controller-token
+                  key: SPLUNK_HEC_INDEX
+            - name: SPLUNK_HEC_INSECURE
+              valueFrom:
+                secretKeyRef:
+                  name: chaos-controller-token
+                  key: SPLUNK_HEC_INSECURE
+          volumeMounts:
+            - name: token
+              mountPath: /var/run/chaos-controller
+              readOnly: true
+            # gunicorn's WorkerTmp uses tempfile.mkstemp(), which walks
+            # /tmp -> /var/tmp -> /usr/tmp -> /app looking for a writable
+            # directory. The hardened containerSecurityContext (shared
+            # with every other service in this chart) sets
+            # readOnlyRootFilesystem: true, so we hand gunicorn a small
+            # tmpfs-backed emptyDir to scribble in without weakening the
+            # rest of the rootfs.
+            - name: gunicorn-tmp
+              mountPath: /tmp
+          readinessProbe:
+            httpGet:
+              path: /chaos/api/health
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 10
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /chaos/api/health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 30
+            timeoutSeconds: 3
+          resources:
+            {{- toYaml .Values.chaosController.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+      volumes:
+        - name: token
+          secret:
+            secretName: chaos-controller-token
+            items:
+              - key: CHAOS_PRESENTER_TOKEN
+                path: CHAOS_PRESENTER_TOKEN
+            defaultMode: 0400
+        - name: gunicorn-tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 16Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: chaos-controller
+  namespace: {{ .Values.namespace }}
+  labels:
+    app.kubernetes.io/name: chaos-controller
+    app.kubernetes.io/component: chaos-controller
+    app.kubernetes.io/part-of: natwest-payments
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: chaos-controller
+  ports:
+    - name: http
+      port: {{ $svcPort }}
+      targetPort: http
+      protocol: TCP
+{{- if .Values.networkPolicy.enabled }}
+---
+# NetworkPolicy: open the chaos-controller's HTTP port to web-frontend
+# (the SPA reverse-proxy). Egress is permissive (DNS + cluster-internal
+# + HEC) because the controller must reach kube-apiserver in
+# `default`/`kube-system` AND the Splunk Enterprise HEC outside the
+# cluster. Blast radius is contained by the chaos-controller's tight
+# RBAC Role, not by NetworkPolicy.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-chaos-controller-ingress
+  namespace: {{ .Values.namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: chaos-controller
+  policyTypes: ["Ingress", "Egress"]
+  ingress:
+    # web-frontend is the only legitimate caller (SPA -> nginx -> here).
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: web-frontend
+      ports:
+        - protocol: TCP
+          port: {{ $svcPort }}
+  egress:
+    # DNS
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # kube-apiserver (HTTPS via kubernetes.default.svc.cluster.local).
+    # The default ClusterIP for the apiserver Service is in the default
+    # namespace; namespaceSelector:{} + port:443 lets us reach it.
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 6443
+    # Splunk Enterprise HEC sits OUTSIDE the cluster (EC2). Allow
+    # external egress on port 8088 (HEC default) so audit events ship.
+    - ports:
+        - protocol: TCP
+          port: 8088
+{{- end }}
+{{- end }}

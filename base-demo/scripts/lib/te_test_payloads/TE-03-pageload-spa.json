@@ -1,0 +1,20 @@
+{
+  "<<REDACTED-TOKEN>>",
+  "description": "Real-browser page-load test on the SPA login page. Captures DOM, page-load, and resource waterfall metrics - same dimensions Splunk RUM gives us for real users, but on a synthetic schedule from known geos. The synthetic baseline that RUM percentiles get compared against.",
+  "type": "page-load",
+  "interval": 300,
+  "url": "${DEMO_BASE_URL}/",
+  "httpTimeLimit": 10,
+  "pageLoadTimeLimit": 15,
+  "verifyCertificate": true,
+  "followRedirects": true,
+  "networkMeasurements": true,
+  "mtuMeasurements": false,
+  "bandwidthMeasurements": false,
+  "bgpMeasurements": false,
+  "pathTraceMode": "in-session",
+  "probeMode": "auto",
+  "subinterval": 300,
+  "agents": ${AGENTS_3},
+  "alertsEnabled": true
+}

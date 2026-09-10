@@ -1,0 +1,19 @@
+# chaos-controller RBAC — NOT captured in the live export (no Role/RoleBinding objects
+# were exported). Grants the chaos-controller SA the deployment scale/patch + pod delete
+# permissions it needs to drive scenarios (KILLABLE_SERVICES + rogue-ledger-query scale).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: { name: chaos-controller, namespace: natwest, labels: { app.kubernetes.io/name: chaos-controller } }
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments", "deployments/scale"]
+    verbs: ["get", "list", "watch", "patch", "update"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: { name: chaos-controller, namespace: natwest, labels: { app.kubernetes.io/name: chaos-controller } }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: chaos-controller }
+subjects: [ { kind: ServiceAccount, name: chaos-controller, namespace: natwest } ]

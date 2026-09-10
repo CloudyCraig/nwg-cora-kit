@@ -1,0 +1,437 @@
+{{- $root := . -}}
+{{- $defaults := .Values.defaults -}}
+{{- range $name, $svc := .Values.services }}
+{{- $imageRepo := $svc.image | default dict -}}
+{{- $repository := $imageRepo.repository | default $root.Values.image.repository -}}
+{{- $tag := $imageRepo.tag | default $root.Values.image.tag -}}
+{{- /*
+  Note: this last variable binding intentionally does NOT use the trailing
+  whitespace-trim form (-}}). The newline that immediately follows is what
+  separates each rendered Deployment YAML doc from the next, since the
+  trailing `{{- end }}` on the loop also strips its own preceding newline.
+  Without this newline preserved, every Deployment after the first gets
+  concatenated onto the previous doc and `kubectl apply` silently drops them.
+*/}}
+{{- $readyPath := $svc.readinessPath | default "/readyz" }}
+{{- /*
+  IMPORTANT: this final variable binding deliberately uses the
+  non-trim form (`}}` not `-}}`). The newline that immediately
+  follows is the YAML document separator between each rendered
+  Deployment when the outer `range` loop iterates. Switching to
+  `-}}` here strips that newline, every Deployment after the first
+  collapses into the previous YAML doc, and `kubectl apply` silently
+  drops 27/28 Deployments. See also the matching note at the top of
+  this template.
+*/}}
+{{- $auditEnabled := $svc.auditEnabled | default false }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  namespace: {{ $root.Values.namespace }}
+  labels:
+    {{- include "natwest.labels" (dict "name" $name "release" $root.Release.Name "tier" ($svc.tier | default "unknown")) | nindent 4 }}
+spec:
+  replicas: {{ $svc.replicas | default $defaults.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ $name }}
+      app.kubernetes.io/instance: {{ $root.Release.Name }}
+  template:
+    metadata:
+      labels:
+        {{- include "natwest.labels" (dict "name" $name "release" $root.Release.Name "tier" ($svc.tier | default "unknown")) | nindent 8 }}
+      annotations:
+        # Ensure pods roll when values.yaml changes materially
+        natwest.payments/topology-hash: {{ toYaml $svc | sha256sum | trunc 16 }}
+        {{- if $auditEnabled }}
+        # Per-container Splunk OTel collector log routing. The audit-tail
+        # sidecar streams /var/log/audit/audit.jsonl to its own stdout,
+        # where the chart's filelog receiver tags it with index=nwpay_audit
+        # and sourcetype=nwpay:payment_audit. The main `service` container
+        # keeps the default routing (main / *services indexes via APM logs).
+        splunk.com/index.audit-tail: "nwpay_audit"
+        splunk.com/sourcetype.audit-tail: "nwpay:payment_audit"
+        {{- end }}
+    spec:
+      serviceAccountName: {{ $root.Values.serviceAccount.name }}
+      automountServiceAccountToken: false
+      securityContext:
+        {{- toYaml $root.Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: service
+          image: "{{ $repository }}:{{ $tag }}"
+          imagePullPolicy: {{ $root.Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ $defaults.port }}
+              protocol: TCP
+          env:
+            - name: PORT
+              value: "{{ $defaults.port }}"
+            - name: DOWNSTREAM_PORT
+              value: "{{ $defaults.port }}"
+            - name: DOWNSTREAM_TIMEOUT_S
+              value: "{{ $svc.downstreamTimeoutS | default $defaults.downstreamTimeoutS }}"
+            - name: GUNICORN_WORKERS
+              value: "{{ $svc.gunicornWorkers | default $defaults.gunicornWorkers }}"
+            - name: GUNICORN_THREADS
+              value: "{{ $svc.gunicornThreads | default $defaults.gunicornThreads }}"
+            # Force unbuffered stdout for live `kubectl logs` visibility.
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: OTEL_SERVICE_NAME
+              value: {{ $name | quote }}
+            - name: SERVICE_TIER
+              value: {{ $svc.tier | default "unknown" | quote }}
+            - name: DOWNSTREAMS
+              value: {{ join "," ($svc.downstreams | default list) | quote }}
+            - name: DOWNSTREAM_FANOUT
+              value: {{ $svc.fanout | default $defaults.fanout | quote }}
+            - name: ERROR_RATE
+              value: "{{ $svc.errorRate | default $defaults.errorRate }}"
+            - name: LATENCY_MS_MEAN
+              value: "{{ $svc.latencyMsMean | default $defaults.latencyMsMean }}"
+            - name: LATENCY_MS_STDDEV
+              value: "{{ $svc.latencyMsStddev | default $defaults.latencyMsStddev }}"
+            # --- Targeted-pathology knobs (default 0; opted-in per service) -
+            - name: TAIL_LATENCY_RATE
+              value: "{{ $svc.tailLatencyRate | default $defaults.tailLatencyRate }}"
+            - name: TAIL_LATENCY_MIN_MS
+              value: "{{ $svc.tailLatencyMinMs | default $defaults.tailLatencyMinMs }}"
+            - name: TAIL_LATENCY_MAX_MS
+              value: "{{ $svc.tailLatencyMaxMs | default $defaults.tailLatencyMaxMs }}"
+            - name: SCHEME_ERROR_MULTIPLIERS
+              value: {{ $svc.schemeErrorMultipliers | default $defaults.schemeErrorMultipliers | quote }}
+            # --- Injected regional-dependency name (madrid-payment-degradation) -
+            # Opt-in per service: names the external screening dependency the
+            # sanctions fault reports — the inferred APM node label + the
+            # "…primary AML screening provider for region ES timed out …;
+            # secondary failover exhausted" message. Only rendered when a service
+            # sets `slowLocationDependency`, so no other service is affected. The
+            # chaos scenario arms SLOW_LOCATION_COUNTRY/LATENCY/ERROR_RATE at
+            # runtime and leaves this name in place.
+            {{- if $svc.slowLocationDependency }}
+            - name: SLOW_LOCATION_DEPENDENCY
+              value: {{ $svc.slowLocationDependency | quote }}
+            {{- end }}
+            # --- Customer-tier behaviour (Bronze/Silver/Gold) ----------------
+            # Strings are parsed by app/service.py::_parse_tier_prob_map. The
+            # Python service only honours TIER_THROTTLE_PROB when SERVICE_TIER
+            # == "gateway", and only honours TIER_FRAUD_FAST_PATH_PROB when
+            # FRAUD_FEATURE_EXTRACTOR_ENABLED, so it is safe to set both
+            # globally on every pod. Empty string disables the feature.
+            - name: TIER_THROTTLE_PROB
+              value: {{ ($root.Values.tierBehaviour | default dict).throttleProb | default "" | quote }}
+            - name: TIER_FRAUD_FAST_PATH_PROB
+              value: {{ ($root.Values.tierBehaviour | default dict).fraudFastPathProb | default "" | quote }}
+            # --- Optional Java ledger DB knobs (no-op for Python services) --
+            - name: DB_LATENCY_MS
+              value: "{{ $svc.dbLatencyMs | default 0 }}"
+            {{- if $svc.dbCredentialsSecret }}
+            - name: SPRING_DATASOURCE_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $svc.dbCredentialsSecret }}
+                  key: POSTGRES_USER
+            - name: SPRING_DATASOURCE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $svc.dbCredentialsSecret }}
+                  key: POSTGRES_PASSWORD
+            {{- end }}
+            {{- if $svc.springDatasourceUrl }}
+            - name: SPRING_DATASOURCE_URL
+              value: {{ $svc.springDatasourceUrl | quote }}
+            {{- end }}
+            # --- Redis cache (only set on services that opt in) -------------
+            - name: CACHE_ENABLED
+              value: "{{ $svc.cacheEnabled | default false }}"
+            - name: CACHE_URL
+              value: {{ $svc.cacheUrl | default "" | quote }}
+            - name: CACHE_HIT_RATE
+              value: "{{ $svc.cacheHitRate | default 0.0 }}"
+            - name: CACHE_KEY_NAMESPACE
+              value: {{ $svc.cacheKeyNamespace | default $name | quote }}
+            # --- Fraud feature extractor (CPU regression demo) --------------
+            # Off everywhere except fraud-detection-service. The kernel is
+            # always run when enabled so AlwaysOn Profiling has a stable
+            # baseline; flipping CPU_REGRESSION_ENABLED at runtime swaps in
+            # the quadratic algorithm and produces a clean profiling diff.
+            - name: FRAUD_FEATURE_EXTRACTOR_ENABLED
+              value: "{{ $svc.fraudFeatureExtractorEnabled | default false }}"
+            - name: FRAUD_FEATURE_COUNT
+              value: "{{ $svc.fraudFeatureCount | default 96 }}"
+            - name: CPU_REGRESSION_ENABLED
+              value: "{{ $svc.cpuRegressionEnabled | default false }}"
+            # --- Kafka producer/consumer (opt-in per service) ---------------
+            - name: KAFKA_PRODUCER_ENABLED
+              value: "{{ $svc.kafkaProducerEnabled | default false }}"
+            - name: KAFKA_CONSUMER_ENABLED
+              value: "{{ $svc.kafkaConsumerEnabled | default false }}"
+            - name: KAFKA_BOOTSTRAP_SERVERS
+              value: {{ $svc.kafkaBootstrapServers | default "" | quote }}
+            - name: KAFKA_TOPIC
+              value: {{ $svc.kafkaTopic | default "" | quote }}
+            - name: KAFKA_CONSUMER_GROUP
+              value: {{ $svc.kafkaConsumerGroup | default $name | quote }}
+            # Drives the Kafka PRODUCER span's peer.service attribute, which
+            # Splunk APM uses to draw the producer -> downstream-service edge
+            # on the service map. Defaults to "kafka" (legacy behaviour: APM
+            # tries to render an inferred broker node). Set to the logical
+            # consumer service name (e.g. "settlement-service" for the
+            # payments.settled topic) so the edge is drawn directly to the
+            # consumer and the chain is not orphaned on the map.
+            - name: KAFKA_PEER_SERVICE
+              value: {{ $svc.kafkaPeerService | default "kafka" | quote }}
+            # --- Read-API endpoints (GET /recent, GET /status/<id>) --------
+            # Empty by default. Populated only on api-gateway in values.yaml
+            # so the SPA's navigation fetches produce traced calls that
+            # pivot cleanly from RUM into APM.
+            - name: READ_API_RECENT_DOWNSTREAMS
+              value: {{ $svc.readApiRecentDownstreams | default "" | quote }}
+            - name: READ_API_STATUS_DOWNSTREAMS
+              value: {{ $svc.readApiStatusDownstreams | default "" | quote }}
+            # Redis-backed ring buffer. When set, /recent and /status read
+            # from Redis (shared across pods + workers) so submit-then-
+            # lookup works regardless of which gateway pod served each
+            # request. Empty => per-process in-memory deque fallback.
+            - name: READ_API_REDIS_URL
+              value: {{ $svc.readApiRedisUrl | default "" | quote }}
+            # --- OpenTelemetry / Splunk OTel Collector wiring ---------------
+            - name: NODE_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.hostIP
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: "http://$(NODE_IP):{{ $root.Values.otel.otlpGrpcPort }}"
+            - name: OTEL_EXPORTER_OTLP_PROTOCOL
+              value: "grpc"
+            - name: OTEL_RESOURCE_ATTRIBUTES
+              value: "deployment.environment={{ $root.Values.otel.environment }},service.namespace=natwest-payments,service.tier={{ $svc.tier | default "unknown" }},k8s.cluster.name={{ $root.Values.otel.deployment }}"
+            - name: OTEL_PROPAGATORS
+              value: "tracecontext,baggage"
+            # Force `peer.service` on auto-instrumented client spans so the
+            # APM Service Map's inferred-infrastructure nodes (drawn from
+            # db.system / messaging.system children) get short, stable
+            # names instead of the auto-derived ones. Without this the
+            # Splunk Java agent's JDBC instrumentation falls back to
+            # `peer.service=postgres.natwest.svc.cluster.local` (the
+            # connection-string host) and APM draws a long node label
+            # that's hard to read on the service map.
+            #
+            # IMPORTANT: these names must NOT match a real APM service
+            # entity. If anything else (e.g. the prometheus/infra metrics
+            # pipeline in collector/values.yaml) advertises
+            # `service.name=redis|postgres|kafka`, APM merges the trace-
+            # inferred infrastructure node into that real service entity
+            # and replaces the branded icon (Postgres elephant, Redis
+            # cube, Kafka swirl) with a generic service circle. The infra
+            # metrics pipeline therefore tags its scrapes with
+            # `infra_component=...` instead of `service_name=...`.
+            #
+            # Format is host=peer-service, comma-separated. Applies to all
+            # auto-instrumented client libraries (JDBC, redis, http, grpc,
+            # kafka-python where supported) across both the Splunk Java
+            # agent and the Python splunk-py-trace distro - both honour
+            # OTEL_INSTRUMENTATION_COMMON_PEER_SERVICE_MAPPING.
+            - name: OTEL_INSTRUMENTATION_COMMON_PEER_SERVICE_MAPPING
+              value: "postgres.natwest.svc.cluster.local=postgres,kafka.natwest.svc.cluster.local=kafka,redis.natwest.svc.cluster.local=redis"
+            # --- Trace<->Log correlation (Splunk APM "Logs" pivot) ----------
+            # The Splunk distros for Python and Java both ship OTLP log
+            # exporters and auto-instrumented logging bridges, but the
+            # accepted spelling of OTEL_LOGS_EXPORTER differs by language:
+            #
+            #   Python: otlp_proto_grpc | otlp_proto_http | console | none
+            #   Java:   otlp            | console         | logging | none
+            #
+            # Passing the Python spelling to a Java service makes the
+            # Splunk OTel Java agent fail SDK initialisation silently
+            # (ConfigurationException on the otel.logs.exporter property
+            # during AutoConfiguredOpenTelemetrySdkBuilder), which
+            # disables ALL signals - the service stops emitting traces
+            # and the Service Map starts showing it as an inferred-only
+            # node (no client-call drill-down, no Logs tab, no Postgres
+            # edge). The chart used to inject `otlp_proto_grpc`
+            # unconditionally; we now branch on `.language`.
+            #
+            # With these env vars in place:
+            #   * OTEL_LOGS_EXPORTER
+            #       Every `logger.info(...)` becomes an OTLP log record
+            #       sent to the node-local agent's OTLP receiver
+            #       (already part of the chart's `logs` pipeline). The
+            #       record carries trace_id, span_id, severity, the full
+            #       resource attributes set above (service.name,
+            #       deployment.environment, k8s.cluster.name, etc.) and
+            #       the log body as proper fields - NOT a parsed string.
+            #   * OTEL_PYTHON_LOG_CORRELATION=true (Python only)
+            #       Tells the LoggingInstrumentor to attach the active
+            #       span context to every log record so the OTLP exporter
+            #       can fill trace_id/span_id automatically. The Java
+            #       agent does the equivalent via Logback/Log4j MDC
+            #       instrumentation enabled by default.
+            #   * OTEL_PYTHON_LOG_LEVEL=info (Python only)
+            #       Default for the auto-instrumented handler. Without
+            #       this, only WARN+ records are exported (gunicorn/Flask
+            #       log routine request handling at INFO).
+            #   * OTEL_PYTHON_LOG_FORMAT (Python only)
+            #       Bonus: makes stdout `kubectl logs` output also carry
+            #       [trace_id=... span_id=...] so demo operators can
+            #       eyeball the correlation without leaving the terminal.
+            # The agent's logs pipeline fans these out to:
+            #   * splunk_hec/o11y          -> Splunk Observability Log
+            #                                 Observer (drives the APM
+            #                                 Service Map "Logs" panel,
+            #                                 enabled by
+            #                                 splunkObservability.logsEnabled
+            #                                 in collector/values.yaml).
+            #   * splunk_hec/platform_logs -> Splunk Enterprise (ITSI
+            #                                 correlation searches and
+            #                                 dashboards still work).
+            {{- $language := $svc.language | default "python" }}
+            - name: OTEL_LOGS_EXPORTER
+              value: {{ if eq $language "java" }}"otlp"{{ else }}"otlp_proto_grpc"{{ end }}
+            {{- if eq $language "python" }}
+            - name: OTEL_PYTHON_LOG_CORRELATION
+              value: "true"
+            - name: OTEL_PYTHON_LOG_LEVEL
+              value: "info"
+            - name: OTEL_PYTHON_LOG_FORMAT
+              value: "%(asctime)s %(levelname)s [%(name)s] [trace_id=%(otelTraceID)s span_id=%(otelSpanID)s resource.service.name=%(otelServiceName)s trace_sampled=%(otelTraceSampled)s] - %(message)s"
+            {{- end }}
+            - name: OTEL_EXPORTER_OTLP_LOGS_PROTOCOL
+              value: "grpc"
+            - name: OTEL_EXPORTER_OTLP_LOGS_ENDPOINT
+              value: "http://$(NODE_IP):{{ $root.Values.otel.otlpGrpcPort }}"
+            # --- Splunk AlwaysOn Profiling (CPU + memory call stacks) -------
+            - name: SPLUNK_PROFILER_ENABLED
+              value: "{{ $root.Values.otel.profilingEnabled | default false }}"
+            - name: SPLUNK_PROFILER_MEMORY_ENABLED
+              value: "{{ $root.Values.otel.profilingEnabled | default false }}"
+            - name: SPLUNK_PROFILER_CALL_STACK_INTERVAL
+              value: "{{ $root.Values.otel.profilingCallStackIntervalMs | default 1000 }}"
+            # Profiler emits via OTLP/logs to the same node-local agent.
+            - name: SPLUNK_PROFILER_LOGS_ENDPOINT
+              value: "http://$(NODE_IP):{{ $root.Values.otel.otlpGrpcPort }}"
+            {{- if $auditEnabled }}
+            # Audit emitter (app/audit.py). Off by default; flipped to
+            # true on the gateway tier so emit_payment_audit / emit_auth_event
+            # write into /var/log/audit/audit.jsonl which the audit-tail
+            # sidecar tails to stdout.
+            - name: AUDIT_ENABLED
+              value: "true"
+            - name: AUDIT_LOG_PATH
+              value: "/var/log/audit/audit.jsonl"
+            # Server-side pepper for HMAC tokenizing customer ids before
+            # they enter the audit log. The Secret is created by
+            # scripts/00-provision.sh alongside the postgres exporter
+            # password; mount path matters - audit.py reads from
+            # AUDIT_PEPPER_PATH first, then falls back to AUDIT_PEPPER.
+            - name: AUDIT_PEPPER_PATH
+              value: "/etc/nwpay-audit-pepper/pepper"
+            {{- end }}
+          # Readiness probe is intentionally very forgiving: under the demo's
+          # cascade pathology, a momentarily saturated payment-initiation pod
+          # still has *some* threads free for /readyz - we just don't want a
+          # single slow response to evict the pod from the Service VIP and
+          # cause the rest of the chain to flap. 8s timeout x 10 failures =
+          # the pod has to be unresponsive for ~80s to be marked unready.
+          readinessProbe:
+            httpGet:
+              path: {{ $readyPath }}
+              port: http
+            initialDelaySeconds: {{ $svc.readinessInitialDelaySeconds | default 5 }}
+            periodSeconds: 8
+            timeoutSeconds: 8
+            failureThreshold: 10
+          # Liveness intentionally uses a TCP socket check, NOT an HTTP /healthz
+          # probe. Under the demo's deliberate cascade pathology, the biggest
+          # fan-out service (payment-initiation-service) can have every gunicorn
+          # worker thread blocked waiting on a downstream tail-latency call,
+          # which means /healthz can't be served in time and the pod gets
+          # SIGKILLed (exit 137) - even though the process is perfectly alive
+          # and currently serving traffic on other connections.
+          #
+          # A TCP probe verifies the kernel still accepts on :8080, which is
+          # true as long as gunicorn is up. The HTTP-based /readyz probe still
+          # detects saturation and pulls the pod from the Service VIP until it
+          # drains.
+          livenessProbe:
+            tcpSocket:
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 6
+          resources:
+            {{- toYaml ($svc.resources | default $root.Values.defaultResources) | nindent 12 }}
+          securityContext:
+            {{- toYaml $root.Values.containerSecurityContext | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            {{- if $auditEnabled }}
+            - name: audit-log
+              mountPath: /var/log/audit
+            - name: audit-pepper
+              mountPath: /etc/nwpay-audit-pepper
+              readOnly: true
+            {{- end }}
+        {{- if $auditEnabled }}
+        # audit-tail: dedicated sidecar that streams the structured
+        # audit log into its own stdout. Per-container splunk.com/* pod
+        # annotations (above) route those records into nwpay_audit
+        # without affecting the main service container's log stream.
+        # Image is the same `service` image - it ships busybox-equivalent
+        # tools via /usr/bin/tail, so we don't need a second base.
+        - name: audit-tail
+          image: "{{ $repository }}:{{ $tag }}"
+          imagePullPolicy: {{ $root.Values.image.pullPolicy }}
+          command:
+            - "/bin/sh"
+            - "-c"
+            - |
+              set -eu
+              # Wait for the file to exist; touch it ourselves so the
+              # tail never spins on stat errors.
+              mkdir -p /var/log/audit
+              : > /var/log/audit/audit.jsonl
+              exec tail -F /var/log/audit/audit.jsonl
+          resources:
+            requests:
+              cpu: "5m"
+              memory: "16Mi"
+            limits:
+              cpu: "50m"
+              memory: "64Mi"
+          securityContext:
+            {{- toYaml $root.Values.containerSecurityContext | nindent 12 }}
+          volumeMounts:
+            - name: audit-log
+              mountPath: /var/log/audit
+        {{- end }}
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        {{- if $auditEnabled }}
+        - name: audit-log
+          emptyDir:
+            sizeLimit: 256Mi
+        - name: audit-pepper
+          secret:
+            secretName: nwpay-audit-pepper
+            optional: true
+            items:
+              - key: pepper
+                path: pepper
+                mode: 0400
+        {{- end }}
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: {{ $name }}
+{{- end }}

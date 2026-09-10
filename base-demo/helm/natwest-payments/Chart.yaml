@@ -1,0 +1,13 @@
+apiVersion: v2
+name: natwest-payments
+description: NatWest Payment Platform demo - 24 microservices instrumented with Splunk OTel for Splunk Observability Cloud.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - splunk
+  - observability
+  - opentelemetry
+  - natwest
+  - payments
+  - demo

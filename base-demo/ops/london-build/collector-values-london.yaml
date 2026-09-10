@@ -1,0 +1,312 @@
+agent:
+  config:
+    exporters:
+      splunk_hec/o11y:
+        log_data_enabled: false
+        profiling_data_enabled: true
+      splunk_hec/platform_logs:
+        index: main
+        sourcetype: kube:container:natwest
+      splunk_hec/platform_metrics:
+        index: itsi_im_metrics
+        sourcetype: otel:metrics
+      splunk_hec/platform_traces:
+        index: otel_traces
+        sourcetype: otel:traces
+    processors:
+      resource/infra:
+        attributes:
+        - action: upsert
+          key: service.namespace
+          value: natwest-payments
+        - action: upsert
+          key: deployment.environment
+          value: demo
+        - action: upsert
+          key: k8s.cluster.name
+          value: natwest-payments-demo
+      transform/audit_routing:
+        log_statements:
+        - conditions:
+          - resource.attributes["k8s.container.name"] == "audit-tail"
+          context: log
+          statements:
+          - set(resource.attributes["com.splunk.index"], "nwpay_audit")
+          - set(resource.attributes["com.splunk.sourcetype"], "nwpay:payment_audit")
+          - set(resource.attributes["com.splunk.sourcetype"], "nwpay:auth") where
+            IsString(body) and IsMatch(body, "\"event_type\":\"auth\"")
+      transform/dbm_routing:
+        log_statements:
+        - context: log
+          statements:
+          - set(resource.attributes["com.splunk.index"], "nwpay_infra")
+          - set(resource.attributes["com.splunk.sourcetype"], "postgres:dbm")
+          - set(resource.attributes["service.name"], "postgres")
+      transform/infra_routing:
+        log_statements:
+        - conditions:
+          - resource.attributes["k8s.container.name"] == "postgres"
+          context: log
+          statements:
+          - set(resource.attributes["com.splunk.index"], "nwpay_infra")
+          - set(resource.attributes["com.splunk.sourcetype"], "postgresql")
+          - set(resource.attributes["service.name"], "postgres")
+        - conditions:
+          - resource.attributes["k8s.container.name"] == "postgres-exporter"
+          context: log
+          statements:
+          - set(resource.attributes["com.splunk.index"], "nwpay_infra")
+          - set(resource.attributes["com.splunk.sourcetype"], "prom:exporter")
+        - conditions:
+          - resource.attributes["k8s.container.name"] == "redis"
+          context: log
+          statements:
+          - set(resource.attributes["com.splunk.index"], "nwpay_infra")
+          - set(resource.attributes["com.splunk.sourcetype"], "redis")
+          - set(resource.attributes["service.name"], "redis")
+        - conditions:
+          - resource.attributes["k8s.container.name"] == "redis-exporter"
+          context: log
+          statements:
+          - set(resource.attributes["com.splunk.index"], "nwpay_infra")
+          - set(resource.attributes["com.splunk.sourcetype"], "prom:exporter")
+        - conditions:
+          - resource.attributes["k8s.container.name"] == "kafka"
+          context: log
+          statements:
+          - set(resource.attributes["com.splunk.index"], "nwpay_infra")
+          - set(resource.attributes["com.splunk.sourcetype"], "kafka")
+          - set(resource.attributes["service.name"], "kafka")
+    receivers:
+      host_metrics:
+        collection_interval: 30s
+      kafkametrics:
+        brokers:
+        - kafka.natwest.svc.cluster.local:9092
+        collection_interval: 30s
+        protocol_version: 2.0.0
+        scrapers:
+        - brokers
+        - topics
+        - consumers
+      postgresql:
+        collection_interval: 30s
+        databases:
+        - ledger
+        endpoint: postgres.natwest.svc.cluster.local:5432
+        password: ${env:PG_EXPORTER_PASSWORD}
+        tls:
+          insecure: true
+        username: ${env:PG_EXPORTER_USER}
+      prometheus/infra:
+        config:
+          scrape_configs:
+          - job_name: redis-exporter
+            metrics_path: /metrics
+            scrape_interval: 30s
+            static_configs:
+            - labels:
+                infra_component: redis
+                k8s_namespace: natwest
+              targets:
+              - redis.natwest.svc.cluster.local:9121
+          - job_name: postgres-exporter
+            metrics_path: /metrics
+            scrape_interval: 30s
+            static_configs:
+            - labels:
+                infra_component: postgres
+                k8s_namespace: natwest
+              targets:
+              - postgres.natwest.svc.cluster.local:9187
+          - job_name: kafka-jmx-exporter
+            metrics_path: /metrics
+            scrape_interval: 30s
+            static_configs:
+            - labels:
+                infra_component: kafka
+                k8s_namespace: natwest
+              targets:
+              - kafka.natwest.svc.cluster.local:5556
+      redis:
+        collection_interval: 30s
+        endpoint: redis.natwest.svc.cluster.local:6379
+        timeout: 5s
+      sqlquery/postgres:
+        collection_interval: 30s
+        datasource: host=postgres.natwest.svc.cluster.local port=5432 user=${env:PG_EXPORTER_USER}
+          password=${env:PG_EXPORTER_PASSWORD} dbname=ledger sslmode=disable
+        driver: postgres
+        queries:
+        - logs:
+          - body_column: query
+          sql: |
+            SELECT pid,
+                   usename,
+                   application_name,
+                   COALESCE(client_addr::text, 'unix') AS client_addr,
+                   COALESCE(state, 'unknown') AS state,
+                   COALESCE(wait_event_type, 'none') AS wait_event_type,
+                   COALESCE(wait_event, 'none') AS wait_event,
+                   COALESCE(EXTRACT(EPOCH FROM (now() - query_start))::int, 0) AS query_age_seconds,
+                   COALESCE(EXTRACT(EPOCH FROM (now() - xact_start))::int, 0) AS xact_age_seconds,
+                   query
+            FROM pg_stat_activity
+            WHERE state IS NOT NULL
+              AND state <> 'idle'
+              AND pid <> pg_backend_pid()
+        - logs:
+          - body_column: query
+          sql: |
+            SELECT queryid::text AS queryid,
+                   calls,
+                   total_exec_time::bigint AS total_exec_ms,
+                   mean_exec_time::int AS mean_exec_ms,
+                   rows,
+                   query
+            FROM pg_stat_statements
+            ORDER BY total_exec_time DESC
+            LIMIT 20
+        - logs:
+          - body_column: blocked_query
+          sql: |
+            SELECT bl.pid AS blocked_pid,
+                   ka.query AS blocking_query,
+                   kl.pid AS blocking_pid,
+                   a.query AS blocked_query,
+                   COALESCE(a.application_name, 'unknown') AS blocked_app
+            FROM pg_locks bl
+            JOIN pg_stat_activity a ON a.pid = bl.pid
+            JOIN pg_locks kl ON kl.transactionid = bl.transactionid AND kl.pid <> bl.pid
+            JOIN pg_stat_activity ka ON ka.pid = kl.pid
+            WHERE NOT bl.granted
+    service:
+      pipelines:
+        logs:
+          processors:
+          - memory_limiter
+          - k8s_attributes
+          - filter/logs
+          - batch
+          - resourcedetection
+          - resource
+          - resource/logs
+          - transform/audit_routing
+          - transform/infra_routing
+        logs/dbm:
+          exporters:
+          - splunk_hec/platform_logs
+          processors:
+          - memory_limiter
+          - resource/infra
+          - transform/dbm_routing
+          - batch
+          receivers:
+          - sqlquery/postgres
+        metrics/infra:
+          exporters:
+          - signalfx
+          - splunk_hec/platform_metrics
+          processors:
+          - memory_limiter
+          - resource/infra
+          - batch
+          receivers:
+          - redis
+          - postgresql
+          - kafkametrics
+          - prometheus/infra
+  enabled: true
+  extraEnvs:
+  - name: PG_EXPORTER_USER
+    valueFrom:
+      secretKeyRef:
+        key: PG_EXPORTER_USER
+        name: postgres-monitoring
+        optional: true
+  - name: PG_EXPORTER_PASSWORD
+    valueFrom:
+      secretKeyRef:
+        key: PG_EXPORTER_PASSWORD
+        name: postgres-monitoring
+        optional: true
+  resources:
+    limits:
+      cpu: 600m
+      memory: 1024Mi
+    requests:
+      cpu: 200m
+      memory: 768Mi
+clusterName: nwg-demo
+clusterReceiver:
+  config:
+    exporters:
+      splunk_hec/platform_metrics:
+        sourcetype: otel:metrics
+    processors:
+      filter/drop_invalid_metrics:
+        error_mode: ignore
+        metrics:
+          datapoint:
+          - value_double != value_double
+          metric:
+          - name == nil
+          - name == ""
+      resource/metrics_host:
+        attributes:
+        - action: upsert
+          key: host.name
+          value: natwest-payments-demo
+    service:
+      pipelines:
+        metrics:
+          processors:
+          - memory_limiter
+          - batch
+          - transform/k8shpascaletargetref
+          - resource
+          - k8s_attributes/metrics
+          - resource/k8s_cluster
+          - resource/metrics_host
+          - filter/drop_invalid_metrics
+        metrics/collector:
+          processors:
+          - memory_limiter
+          - batch
+          - resourcedetection
+          - resource/metrics_host
+          - filter/drop_invalid_metrics
+  enabled: true
+  resources:
+    limits:
+      cpu: 200m
+      memory: 384Mi
+    requests:
+      cpu: 100m
+      memory: 256Mi
+gateway:
+  enabled: false
+logsCollection:
+  checkpointPath: /var/addon/splunk/otel_pos
+  containers:
+    enabled: true
+    useSplunkIncludeAnnotation: false
+secret:
+  create: true
+  name: splunk-otel-collector
+  validateSecret: false
+splunkObservability:
+  accessToken: PLACEHOLDER
+  metricsEnabled: true
+  profilingEnabled: true
+  realm: eu2
+  tracesEnabled: true
+splunkPlatform:
+  endpoint: https://172.31.140.81:8088/services/collector
+  index: main
+  insecureSkipVerify: true
+  logsEnabled: true
+  metricsEnabled: true
+  metricsIndex: itsi_im_metrics
+  token: f3c1c2a4-9e0b-4a1d-9b3f-2c8a5d6f7e10
+  tracesEnabled: true

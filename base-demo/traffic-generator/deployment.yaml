@@ -1,0 +1,192 @@
+# Traffic generator Deployment. Applied by scripts/04-start-traffic.sh after
+# substituting the ECR image reference.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: traffic-generator
+  namespace: natwest
+  labels:
+    app.kubernetes.io/name: traffic-generator
+    app.kubernetes.io/part-of: natwest-payments
+    app.kubernetes.io/component: traffic
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: traffic-generator
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: traffic-generator
+        app.kubernetes.io/part-of: natwest-payments
+        app.kubernetes.io/component: traffic
+    spec:
+      serviceAccountName: natwest-payments
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: generator
+          image: __TRAFFIC_GENERATOR_IMAGE__
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: TARGET_URL
+              value: "http://api-gateway.natwest.svc.cluster.local:8080/process"
+            # Flat demo baseline. RPS_SCHEDULE is intentionally empty (below) so
+            # this constant rate is used all day. 12 rps keeps the heavy payment
+            # fan-out comfortably green on the current cluster (payment-init p95
+            # ~500 ms); the old time-of-day schedule peaked at 40-50 rps, which
+            # saturates this topology (multi-second tail + 6 s read timeouts) and
+            # masks injected chaos. Raise only after scaling api-gateway /
+            # payment-initiation / payment-validation capacity. See chaos
+            # traffic-steady-state for the same intent.
+            - name: RPS
+              value: "12"
+            # Time-of-day schedule (European retail-bank shape):
+            # ~180 TPM (3 RPS) overnight trough, ramp to ~2,400 TPM (40 RPS)
+            # at 09:00 UK, ~1,800 TPM (30 RPS) lunch dip, peak ~3,000 TPM
+            # (50 RPS) at 17:00 (overlaps EU close-of-business), then taper.
+            # The generator linearly interpolates between adjacent points
+            # and wraps at midnight.
+            #
+            # Aggregate / 24 h: ~2.0 - 2.5 M payments -- looks like ~1% of
+            # a real UK retail bank's daily volume, which is enough to keep
+            # the dashboards textured without saturating the 2 x t3.large
+            # EKS cluster.
+            # Disabled for the clean demo baseline (see RPS above). The original
+            # weekday curve is preserved here, commented out, so it can be
+            # restored once the cluster is scaled to handle its 40-50 rps peaks:
+            #   '[{"hour":0,"rps":3},{"hour":7,"rps":10},{"hour":9,"rps":40},{"hour":12,"rps":30},{"hour":13,"rps":30},{"hour":15,"rps":40},{"hour":17,"rps":50},{"hour":20,"rps":15},{"hour":23,"rps":3}]'
+            - name: RPS_SCHEDULE
+              value: ''
+            # Saturday + Sunday curve. Real UK retail-bank weekend volume
+            # is flatter with a later peak: no 09:00 commuter spike, a
+            # leisure-shopping bump 14:00-18:00, an evening dinner /
+            # contactless-low-value tail 19:00-22:00. Aggregate ~60-70%
+            # of weekday volume. Leave empty to use the weekday curve
+            # every day.
+            # Disabled for the clean demo baseline. Original weekend curve:
+            #   '[{"hour":0,"rps":3},{"hour":8,"rps":6},{"hour":11,"rps":18},{"hour":14,"rps":32},{"hour":18,"rps":36},{"hour":21,"rps":22},{"hour":23,"rps":6}]'
+            - name: RPS_SCHEDULE_WEEKEND
+              value: ''
+            - name: RPS_SCHEDULE_TZ
+              value: "Europe/London"
+            # Worker count must cover RPS x worst-case end-to-end latency:
+            # ~30 RPS * ~3s worst-case (sanctions-aml/swift tail propagation)
+            # = ~90 in-flight, give it headroom to ride through bursts.
+            - name: WORKERS
+              value: "128"
+            # The deliberate pathology can stack a sanctions-aml tail
+            # (~2.5s) on top of a swift-network tail (~6s) on top of
+            # fraud-detection's high stddev. Those are the *story* tails
+            # for the demo - we want them to complete and produce real
+            # 200-with-high-latency traces, not be cut off as client-side
+            # timeouts (which inflate the error rate without telling the
+            # interesting story).
+            - name: TIMEOUT_S
+              value: "15"
+            - name: DURATION_SECONDS
+              value: "0"
+            - name: ERROR_BURST_EVERY
+              value: "180"
+            - name: ERROR_BURST_SIZE
+              value: "25"
+            # Persona tier mix (Bronze/Silver/Gold). Format is identical to
+            # the helm tierBehaviour strings so the same syntax applies in
+            # both places. Defaults inside generate.py if this is missing.
+            - name: TIER_MIX
+              value: "bronze:60,silver:30,gold:10"
+            # European customer location mix. Weighted city pool drives
+            # customer.location / customer.country / customer.region span
+            # attributes plus a per-request "submit_payment" wrapper span
+            # whose duration includes the city's simulated network RTT
+            # (London ~50 ms ... Madrid ~450 ms). The weights below are
+            # an opinionated UK-retail-bank-in-Europe distribution; tune
+            # to taste without rebuilding the container.
+            - name: LOCATION_MIX
+              value: "london:40,frankfurt:18,paris:14,madrid:10,milan:8,amsterdam:4,dublin:3,lisbon:2,brussels:1"
+            # Per-city RTT override "city:mean_ms/stddev_ms,...". Empty
+            # string => use the baseline rtt_mean_ms / rtt_stddev_ms baked
+            # into LOCATIONS in generate.py. Useful for escalating a city
+            # live, e.g. LOCATION_LATENCY_PROFILES="madrid:1500/300" turns
+            # the Madrid baseline (450 +/- 120) into a full-blown incident
+            # without restarting the generator code.
+            - name: LOCATION_LATENCY_PROFILES
+              value: ""
+            # Roaming rate. Fraction of payments where customer.home_country
+            # differs from customer.country (the city the request comes from).
+            # 0.05 = ~5% baseline cross-border activity, which the fraud-
+            # detection dashboards pivot on (payment.roaming = true / false).
+            # Dial higher to simulate a coordinated travel-fraud incident:
+            #   kubectl set env deploy/traffic-generator -n natwest \
+            #     ROAMING_RATE=0.25
+            - name: ROAMING_RATE
+              value: "0.05"
+            # Bank-holiday calendar. When true, _pick_location() zeroes
+            # out the weight of any city whose country is on a public
+            # holiday today, so "Spain went dark" / "France is closed"
+            # shows up naturally in the by-location panels on real
+            # holidays. Set false to disable; set
+            # BANK_HOLIDAY_DATE_OVERRIDE="MM-DD" to simulate any date.
+            - name: BANK_HOLIDAYS_ENABLED
+              value: "true"
+            - name: BANK_HOLIDAY_DATE_OVERRIDE
+              value: ""
+            # SPA auth beacon. Drives the api-gateway /api/auth/event
+            # endpoint at AUTH_BEACON_RPS so the L1 KPI "Auth failure
+            # rate" stays populated without requiring a human to log in
+            # via the SPA. Outcome mix is success-heavy with a small
+            # failure tail so the KPI sits around ~4-5%.
+            - name: AUTH_BEACON_URL
+              value: "http://api-gateway.natwest.svc.cluster.local:8080/api/auth/event"
+            - name: AUTH_BEACON_RPS
+              value: "2"
+            - name: AUTH_OUTCOME_MIX
+              value: "success:95,failed:4,rate_limited:1"
+            # Ensure the 10-second stats lines actually flush to stdout so
+            # `kubectl logs deploy/traffic-generator -f` shows live RPS.
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: NODE_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.hostIP
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: "http://$(NODE_IP):4317"
+            - name: OTEL_RESOURCE_ATTRIBUTES
+              value: "deployment.environment=demo,service.namespace=natwest-payments,service.tier=traffic,service.region=europe"
+            # NOTE: peer.service is set explicitly at request time by the
+            # RequestsInstrumentor request_hook in generate.py (look for
+            # _peer_service_request_hook). The previously-used
+            # OTEL_INSTRUMENTATION_COMMON_PEER_SERVICE_MAPPING env var was
+            # removed because the splunk-py-trace distro did not apply it
+            # reliably to `requests` CLIENT spans, leaving traffic-generator
+            # as a floating island on the APM service map.
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "192Mi"
+            # 128 worker threads * (~3s worst-case) -> a few thousand
+            # in-flight Span objects + per-status counters during the
+            # peak-hour schedule + OTel SDK batching buffers easily push
+            # the RSS over 256Mi. 512Mi gives headroom; previous demos
+            # at this scale showed ~280-350Mi steady RSS.
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}

@@ -1,0 +1,21 @@
+{
+  "<<REDACTED-TOKEN>>",
+  "description": "Independent backend probe that exercises the /api/recent read path on the api-gateway via the public proxy. Lets us tell apart 'page is up' from 'API is broken' when one alert fires without the other.",
+  "type": "http-server",
+  "interval": 120,
+  "url": "${DEMO_BASE_URL}/api/recent?limit=3",
+  "httpVersion": 2,
+  "httpTimeLimit": 8,
+  "verifyCertificate": true,
+  "followRedirects": true,
+  "networkMeasurements": true,
+  "mtuMeasurements": false,
+  "bandwidthMeasurements": false,
+  "bgpMeasurements": false,
+  "pathTraceMode": "in-session",
+  "probeMode": "auto",
+  "desiredStatusCode": "200",
+  "contentRegex": "\"items\"",
+  "agents": ${AGENTS_3},
+  "alertsEnabled": true
+}

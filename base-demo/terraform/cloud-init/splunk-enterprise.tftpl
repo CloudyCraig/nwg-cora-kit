@@ -1,0 +1,476 @@
+#cloud-config
+# Splunk Enterprise 10.x bootstrap for the NatWest payments demo.
+#
+# Boot sequence:
+#   1. Install dependencies (awscli already on AL2023; tar/fontconfig/polkit
+#      for splunk - polkit is required by 'enable boot-start
+#      -create-polkit-rules 1' and is NOT installed by default on AL2023).
+#   2. Create the splunk service user.
+#   3. Pull the install tarball + license from the staging S3 bucket via the
+#      instance role (no AWS keys baked in).
+#   4. Extract to /opt/splunk, drop a user-seed.conf so the first 'splunk start'
+#      bootstraps the admin account with the supplied password.
+#   5. Pre-stage HEC inputs.conf with a pinned token so the very first start
+#      brings up port 8088 - no second restart needed.
+#   6. 'splunk start --accept-license --answer-yes --no-prompt' - first start
+#      compiles serverclass, applies user-seed, generates self-signed certs.
+#   7. 'splunk add licenses' to register the NFR license (idempotent).
+#   8. Stop splunkd, 'splunk enable boot-start -systemd-managed 1
+#      -create-polkit-rules 1', start back up via systemctl. This single
+#      systemd start picks up the new license + HEC inputs at once.
+#
+# All long-running work runs in /opt/splunk-bootstrap.sh (rendered below) so the
+# cloud-init log stays readable - tail /var/log/splunk-bootstrap.log on the
+# instance to follow progress.
+
+write_files:
+  - path: /etc/profile.d/splunk-home.sh
+    permissions: '0644'
+    content: |
+      export SPLUNK_HOME=/opt/splunk
+      export PATH="$PATH:/opt/splunk/bin"
+
+  - path: /opt/splunk-bootstrap.sh
+    permissions: '0750'
+    owner: root:root
+    content: |
+      #!/usr/bin/env bash
+      # Idempotent: re-running this script after a clean install is a no-op
+      # because every guarded step checks for a sentinel file or splunkd's
+      # current state.
+      set -euo pipefail
+
+      LOG=/var/log/splunk-bootstrap.log
+      exec > >(tee -a "$LOG") 2>&1
+      echo "[$(date -Is)] splunk bootstrap starting"
+
+      SPLUNK_HOME=/opt/splunk
+      SPLUNK_USER=splunk
+      SPLUNK_BUCKET="${splunk_bucket}"
+      SPLUNK_TARBALL_KEY="${splunk_tarball_key}"
+      SPLUNK_LICENSE_KEY="${splunk_license_key}"
+      SPLUNK_ADMIN_USER="admin"
+      SPLUNK_ADMIN_PASS='${splunk_admin_password}'
+      SPLUNK_HEC_TOKEN='${splunk_hec_token}'
+      SPLUNK_HEC_TOKEN_FIREHOSE='${splunk_hec_token_firehose}'
+      SPLUNK_HEC_TOKEN_SCRIPTS='${splunk_hec_token_scripts}'
+
+      if ! id "$SPLUNK_USER" >/dev/null 2>&1; then
+        echo "[bootstrap] creating $SPLUNK_USER service account"
+        useradd --system --home-dir "$SPLUNK_HOME" --shell /sbin/nologin "$SPLUNK_USER"
+      fi
+
+      # polkit is required by 'splunk enable boot-start -create-polkit-rules 1'.
+      # AL2023 doesn't ship polkit by default so we install it up-front; without
+      # it the boot-start step aborts with "Polkit has not been installed".
+      #
+      # java-17-amazon-corretto is required by the ITSI Notable Event Aggregation
+      # Policy (NEAP) rules engine - itsi_queue_re_init.py spawns a Java
+      # process (com.splunk.itsi.search.chunk.RulesEngineSearch) that
+      # consumes notable events from NATS and writes episodes to
+      # index=itsi_grouped_alerts + the itsi_notable_event_group KV
+      # collection. Without Java, ITSI's Event Analytics screen stays
+      # empty even when notable events (index=itsi_tracked_alerts) are
+      # being generated - silently, with only an ERROR line buried in
+      # /opt/splunk/var/log/splunk/itsi_queue_re_init.log saying
+      # "Java version 8.x - 11.x or Java 17 is required". The Splunk
+      # service inherits JAVA_HOME via /opt/splunk/etc/splunk-launch.conf
+      # (written further below in this script).
+      dnf install -y --quiet tar gzip fontconfig dejavu-sans-fonts polkit java-17-amazon-corretto-headless \
+        || yum install -y tar gzip fontconfig dejavu-sans-fonts polkit java-17-amazon-corretto-headless
+
+      # Persist JAVA_HOME for interactive shells (debugging the rules
+      # engine from a presenter session).
+      cat > /etc/profile.d/java17.sh <<'JAVAENV'
+      export JAVA_HOME=/usr/lib/jvm/java-17-amazon-corretto.x86_64
+      export PATH=$JAVA_HOME/bin:$PATH
+      JAVAENV
+      chmod 0644 /etc/profile.d/java17.sh
+
+      if [ ! -x "$SPLUNK_HOME/bin/splunk" ]; then
+        echo "[bootstrap] downloading splunk media from s3://$SPLUNK_BUCKET/$SPLUNK_TARBALL_KEY"
+        mkdir -p /opt/splunk-media
+        aws s3 cp "s3://$SPLUNK_BUCKET/$SPLUNK_TARBALL_KEY" /opt/splunk-media/splunk.tgz
+
+        echo "[bootstrap] extracting tarball to /opt"
+        tar -xzf /opt/splunk-media/splunk.tgz -C /opt
+        chown -R "$SPLUNK_USER:$SPLUNK_USER" "$SPLUNK_HOME"
+      else
+        echo "[bootstrap] $SPLUNK_HOME/bin/splunk already present, skipping extract"
+      fi
+
+      # Ensure splunkd inherits JAVA_HOME on every start (systemd unit
+      # sources splunk-launch.conf via `splunk start`). Without this the
+      # ITSI rules engine ('itsi_queue_re_init.py' -> Java) cannot find
+      # Java even after the corretto package is installed, because the
+      # systemd service unit runs with a near-empty environment.
+      mkdir -p "$SPLUNK_HOME/etc"
+      touch "$SPLUNK_HOME/etc/splunk-launch.conf"
+      if ! grep -q '^JAVA_HOME=' "$SPLUNK_HOME/etc/splunk-launch.conf"; then
+        echo "JAVA_HOME=/usr/lib/jvm/java-17-amazon-corretto.x86_64" >> "$SPLUNK_HOME/etc/splunk-launch.conf"
+      fi
+      chown "$SPLUNK_USER:$SPLUNK_USER" "$SPLUNK_HOME/etc/splunk-launch.conf"
+
+      # Seed the admin password BEFORE first start. user-seed.conf is consumed
+      # exactly once and then deleted by splunkd. After first start we never
+      # write the password to disk again.
+      if [ ! -f "$SPLUNK_HOME/etc/auth/splunk.secret" ]; then
+        echo "[bootstrap] seeding admin user via etc/system/local/user-seed.conf"
+        mkdir -p "$SPLUNK_HOME/etc/system/local"
+        cat > "$SPLUNK_HOME/etc/system/local/user-seed.conf" <<USERSEED
+      [user_info]
+      USERNAME = $SPLUNK_ADMIN_USER
+      PASSWORD = $SPLUNK_ADMIN_PASS
+      USERSEED
+        chown "$SPLUNK_USER:$SPLUNK_USER" "$SPLUNK_HOME/etc/system/local/user-seed.conf"
+        chmod 0600 "$SPLUNK_HOME/etc/system/local/user-seed.conf"
+      fi
+
+      # Pre-stage HEC inputs so the very first start brings up port 8088 with
+      # the pinned token. Without this we'd need a second restart after
+      # 'splunk http-event-collector enable'.
+      mkdir -p "$SPLUNK_HOME/etc/apps/splunk_httpinput/local"
+      cat > "$SPLUNK_HOME/etc/apps/splunk_httpinput/local/inputs.conf" <<HECCONF
+      [http]
+      disabled = 0
+      enableSSL = 1
+      port = 8088
+
+      [http://otel-collector]
+      disabled = 0
+      token = $SPLUNK_HEC_TOKEN
+      # itsi_im_metrics is a metrics-type index pre-provisioned by ITSI - it
+      # is the destination for splunk_hec/platform_metrics from the OTel
+      # collector. Events (logs/traces) go to main by default; the collector
+      # routes per record to nwpay_audit / nwpay_infra via the
+      # com.splunk.index attribute, which requires the index to be on the
+      # allow-list below.
+      # otel_traces is the dedicated event index for trace spans -
+      # separating spans from `main` keeps Splunk Observability Log
+      # Observer Connect from rendering every span as an "unknown log
+      # type". See collector/values.yaml `splunk_hec/platform_traces`
+      # comment block.
+      indexes = main, _internal, itsi_im_metrics, nwpay_audit, nwpay_infra, otel_traces
+      index = main
+
+      # AWS Kinesis Firehose pushes CloudTrail / VPC Flow / GuardDuty /
+      # EKS audit logs through this token. Each Firehose delivery stream
+      # sets the destination index via the `splunk_index` request param so
+      # the allow-list lists every aws_* index.
+      [http://aws-firehose]
+      disabled = 0
+      token = $SPLUNK_HEC_TOKEN_FIREHOSE
+      indexes = aws_cloudtrail, aws_vpcflow, aws_guardduty, aws_eks_audit
+      index = aws_cloudtrail
+
+      # Demo helper scripts (chaos audit, ad-hoc banking events) write into
+      # the audit index. Token is intentionally narrow so a leaked script
+      # token cannot be used to forge AWS cloud-plane events.
+      [http://demo-scripts]
+      disabled = 0
+      token = $SPLUNK_HEC_TOKEN_SCRIPTS
+      indexes = nwpay_audit
+      index = nwpay_audit
+      HECCONF
+      chown -R "$SPLUNK_USER:$SPLUNK_USER" "$SPLUNK_HOME/etc/apps/splunk_httpinput"
+
+      # Pre-stage indexes for the expanded log catalogue. Splitting indexes
+      # by data domain keeps retention/access tunable per source: nwpay_*
+      # for application/business data, aws_* for cloud-plane data. The
+      # itsi_* indexes ITSI ships with are left untouched.
+      mkdir -p "$SPLUNK_HOME/etc/apps/natwest_demo_inputs/local"
+      mkdir -p "$SPLUNK_HOME/etc/apps/natwest_demo_inputs/metadata"
+      cat > "$SPLUNK_HOME/etc/apps/natwest_demo_inputs/local/indexes.conf" <<INDEXCONF
+      # Application/business audit log: synthetic banking audit events,
+      # SPA auth events, chaos-injection audit events. Retention is short
+      # because the demo only needs a few days of context.
+      [nwpay_audit]
+      homePath   = \$SPLUNK_DB/nwpay_audit/db
+      coldPath   = \$SPLUNK_DB/nwpay_audit/colddb
+      thawedPath = \$SPLUNK_DB/nwpay_audit/thaweddb
+      maxTotalDataSizeMB = 5120
+      frozenTimePeriodInSecs = 604800
+
+      # Infrastructure logs: nginx access/error, Postgres, Redis, Kafka.
+      [nwpay_infra]
+      homePath   = \$SPLUNK_DB/nwpay_infra/db
+      coldPath   = \$SPLUNK_DB/nwpay_infra/colddb
+      thawedPath = \$SPLUNK_DB/nwpay_infra/thaweddb
+      maxTotalDataSizeMB = 5120
+      frozenTimePeriodInSecs = 604800
+
+      # AWS cloud-plane log indexes. CIM-aligned naming (aws:cloudtrail,
+      # aws:cloudwatchlogs:vpcflow, etc.) so the Splunk Add-on for AWS
+      # picks them up without further mapping.
+      [aws_cloudtrail]
+      homePath   = \$SPLUNK_DB/aws_cloudtrail/db
+      coldPath   = \$SPLUNK_DB/aws_cloudtrail/colddb
+      thawedPath = \$SPLUNK_DB/aws_cloudtrail/thaweddb
+      maxTotalDataSizeMB = 5120
+      frozenTimePeriodInSecs = 1209600
+
+      [aws_vpcflow]
+      homePath   = \$SPLUNK_DB/aws_vpcflow/db
+      coldPath   = \$SPLUNK_DB/aws_vpcflow/colddb
+      thawedPath = \$SPLUNK_DB/aws_vpcflow/thaweddb
+      maxTotalDataSizeMB = 10240
+      frozenTimePeriodInSecs = 604800
+
+      [aws_guardduty]
+      homePath   = \$SPLUNK_DB/aws_guardduty/db
+      coldPath   = \$SPLUNK_DB/aws_guardduty/colddb
+      thawedPath = \$SPLUNK_DB/aws_guardduty/thaweddb
+      maxTotalDataSizeMB = 2048
+      frozenTimePeriodInSecs = 2592000
+
+      [aws_eks_audit]
+      homePath   = \$SPLUNK_DB/aws_eks_audit/db
+      coldPath   = \$SPLUNK_DB/aws_eks_audit/colddb
+      thawedPath = \$SPLUNK_DB/aws_eks_audit/thaweddb
+      maxTotalDataSizeMB = 5120
+      frozenTimePeriodInSecs = 1209600
+
+      # Dedicated event index for OpenTelemetry trace spans shipped from
+      # the splunk-otel-collector splunk_hec/platform_traces exporter.
+      # Keeping spans out of `main` is important so Splunk Observability
+      # Cloud's Log Observer Connect (LOC) integration -- which federates
+      # `index=main` for the APM Service Map "Logs" tab -- does not render
+      # every span as an "unknown log type" record. Short retention (3
+      # days) because spans are high-cardinality and ITSI base searches
+      # only look back a few minutes.
+      [otel_traces]
+      homePath   = \$SPLUNK_DB/otel_traces/db
+      coldPath   = \$SPLUNK_DB/otel_traces/colddb
+      thawedPath = \$SPLUNK_DB/otel_traces/thaweddb
+      maxTotalDataSizeMB = 10240
+      frozenTimePeriodInSecs = 259200
+      INDEXCONF
+
+      # Sourcetype hints for the new event streams. props/transforms are
+      # owned by this app rather than the splunk_httpinput app so they
+      # do not collide with a future TA upgrade. SHOULD_LINEMERGE=false +
+      # LINE_BREAKER for JSON-emitted streams to keep one event per record.
+      cat > "$SPLUNK_HOME/etc/apps/natwest_demo_inputs/local/props.conf" <<PROPSCONF
+      [nwpay:payment_audit]
+      INDEXED_EXTRACTIONS = json
+      KV_MODE = none
+      TRUNCATE = 0
+      SHOULD_LINEMERGE = false
+      LINE_BREAKER = ([\r\n]+)
+      TIME_PREFIX = "@timestamp"\s*:\s*"
+      TIME_FORMAT = %Y-%m-%dT%H:%M:%S.%3N%Z
+      MAX_TIMESTAMP_LOOKAHEAD = 32
+
+      [nwpay:auth]
+      INDEXED_EXTRACTIONS = json
+      KV_MODE = none
+      TRUNCATE = 0
+      SHOULD_LINEMERGE = false
+      LINE_BREAKER = ([\r\n]+)
+      TIME_PREFIX = "@timestamp"\s*:\s*"
+      TIME_FORMAT = %Y-%m-%dT%H:%M:%S.%3N%Z
+
+      [nwpay:chaos]
+      INDEXED_EXTRACTIONS = json
+      KV_MODE = none
+      TRUNCATE = 0
+      SHOULD_LINEMERGE = false
+      LINE_BREAKER = ([\r\n]+)
+      TIME_PREFIX = "@timestamp"\s*:\s*"
+      TIME_FORMAT = %Y-%m-%dT%H:%M:%S.%3N%Z
+
+      [nginx:access]
+      INDEXED_EXTRACTIONS = json
+      KV_MODE = none
+      TRUNCATE = 0
+      SHOULD_LINEMERGE = false
+      LINE_BREAKER = ([\r\n]+)
+
+      [nginx:error]
+      SHOULD_LINEMERGE = true
+      MUST_BREAK_AFTER = ^\d{4}/\d{2}/\d{2}\s\d{2}:\d{2}:\d{2}
+
+      [postgresql]
+      SHOULD_LINEMERGE = true
+      MUST_BREAK_AFTER = ^\d{4}-\d{2}-\d{2}\s\d{2}:\d{2}:\d{2}
+
+      [postgres:dbm]
+      INDEXED_EXTRACTIONS = json
+      KV_MODE = none
+      TRUNCATE = 0
+      SHOULD_LINEMERGE = false
+      LINE_BREAKER = ([\r\n]+)
+
+      [redis]
+      SHOULD_LINEMERGE = false
+      LINE_BREAKER = ([\r\n]+)
+
+      [kafka]
+      SHOULD_LINEMERGE = true
+      MUST_BREAK_AFTER = ^\[\d{4}-\d{2}-\d{2}
+
+      [kafka:server]
+      SHOULD_LINEMERGE = true
+      MUST_BREAK_AFTER = ^\[\d{4}-\d{2}-\d{2}
+      PROPSCONF
+
+      cat > "$SPLUNK_HOME/etc/apps/natwest_demo_inputs/local/savedsearches.conf" <<SAVEDCONF
+      [Infra Logs - Postgres slow statements]
+      description = Slow Postgres statements from container stderr (nwpay_infra)
+      search = index=nwpay_infra sourcetype=postgresql "duration:" earliest=-24h | head 100
+      dispatch.earliest_time = -24h@h
+      dispatch.latest_time = now
+      is_scheduled = 0
+
+      [Infra Logs - Kafka ERROR WARN]
+      description = Kafka broker WARN/ERROR lines from nwpay_infra
+      search = index=nwpay_infra sourcetype=kafka (ERROR OR WARN) earliest=-24h | head 100
+      dispatch.earliest_time = -24h@h
+      dispatch.latest_time = now
+      is_scheduled = 0
+
+      [Infra Logs - Redis evictions OOM]
+      description = Redis eviction / OOM signals from nwpay_infra
+      search = index=nwpay_infra sourcetype=redis (evict* OR OOM OR "out of memory") earliest=-24h | head 100
+      dispatch.earliest_time = -24h@h
+      dispatch.latest_time = now
+      is_scheduled = 0
+      SAVEDCONF
+
+      cat > "$SPLUNK_HOME/etc/apps/natwest_demo_inputs/metadata/local.meta" <<METACONF
+      []
+      access = read : [ * ], write : [ admin, power ]
+      export = system
+      METACONF
+
+      # Monitor stanzas for log files that live on this same EC2 host:
+      #   * the public-internet nginx reverse proxy (scripts/05b-frontend-public-proxy.sh)
+      # Splunkd already runs as the splunk user, but nginx writes to
+      # /var/log/nginx as root. We mirror the AL2023 default which keeps
+      # /var/log/nginx world-readable (0755 dir, 0644 logs) so splunkd can
+      # tail them. If a future hardening step locks that down, the operator
+      # can either (a) chown the dir to splunk:adm and update logrotate,
+      # or (b) install a Splunk forwarder that runs as root.
+      cat > "$SPLUNK_HOME/etc/apps/natwest_demo_inputs/local/inputs.conf" <<MONITORCONF
+      [monitor:///var/log/nginx/spa-access.log]
+      disabled = 0
+      sourcetype = nginx:access
+      index = nwpay_infra
+      source = nginx-public-proxy
+
+      [monitor:///var/log/nginx/spa-error.log]
+      disabled = 0
+      sourcetype = nginx:error
+      index = nwpay_infra
+      source = nginx-public-proxy
+      MONITORCONF
+
+      chown -R "$SPLUNK_USER:$SPLUNK_USER" "$SPLUNK_HOME/etc/apps/natwest_demo_inputs"
+
+      # First start: accepts EULA, applies user-seed, builds default certs.
+      # NOTE: do NOT gate on 'splunk status' here. On Splunk 10.x first run,
+      # 'splunk status' against an un-bootstrapped install spins in R-state for
+      # tens of minutes (observed: 38 min) because splunk's CLI walks the entire
+      # config tree before splunkd has been initialised. 'splunk start' is
+      # itself idempotent (returns "splunkd is running" immediately on a second
+      # invocation), so we just call start unconditionally.
+      if [ ! -f "$SPLUNK_HOME/etc/auth/splunk.secret" ]; then
+        echo "[bootstrap] first start (--accept-license --answer-yes --no-prompt)"
+      else
+        echo "[bootstrap] starting splunk (idempotent - returns fast if already running)"
+      fi
+      sudo -u "$SPLUNK_USER" "$SPLUNK_HOME/bin/splunk" start \
+        --accept-license --answer-yes --no-prompt
+
+      echo "[bootstrap] downloading license from s3://$SPLUNK_BUCKET/$SPLUNK_LICENSE_KEY"
+      mkdir -p /opt/splunk-media
+      aws s3 cp "s3://$SPLUNK_BUCKET/$SPLUNK_LICENSE_KEY" /opt/splunk-media/splunk.License
+      chown "$SPLUNK_USER:$SPLUNK_USER" /opt/splunk-media/splunk.License
+
+      # 'splunk add licenses' is idempotent: it returns "already installed" on
+      # the second run so we don't need to gate it.
+      echo "[bootstrap] installing license"
+      sudo -u "$SPLUNK_USER" "$SPLUNK_HOME/bin/splunk" add licenses \
+        /opt/splunk-media/splunk.License \
+        -auth "$SPLUNK_ADMIN_USER:$SPLUNK_ADMIN_PASS" || true
+
+      # systemd boot-start: --systemd-managed 1 generates a unit file under
+      # /etc/systemd/system/Splunkd.service. -create-polkit-rules 1 needs the
+      # polkit package (installed up-front above). 'splunk enable boot-start'
+      # refuses to run while splunkd is up, so we stop first, enable, then
+      # bring it back up via systemctl. The systemd-managed start also picks
+      # up the new license + pre-staged HEC inputs in one go - no separate
+      # 'splunk restart' needed.
+      if [ ! -f /etc/systemd/system/Splunkd.service ]; then
+        echo "[bootstrap] stopping splunkd before enabling boot-start"
+        sudo -u "$SPLUNK_USER" "$SPLUNK_HOME/bin/splunk" stop || true
+
+        echo "[bootstrap] enabling systemd boot-start"
+        # 'enable boot-start' rejects -auth on Splunk 10.x ("Unknown argument:
+        # -auth"); the call doesn't need credentials because splunkd is
+        # stopped. Pass only -user/-systemd-managed/-create-polkit-rules.
+        "$SPLUNK_HOME/bin/splunk" enable boot-start \
+          -user "$SPLUNK_USER" \
+          -systemd-managed 1 \
+          -create-polkit-rules 1
+
+        echo "[bootstrap] starting splunkd via systemd"
+        systemctl daemon-reload
+        systemctl enable Splunkd
+        systemctl start Splunkd
+      else
+        echo "[bootstrap] Splunkd.service already present, restarting via systemd"
+        systemctl restart Splunkd
+      fi
+
+      # Final guard: write a sentinel so a re-run of cloud-init (e.g. instance
+      # reboot with new user-data) skips the heavy lifting fast.
+      echo "ready" > /var/lib/splunk-bootstrap.done
+      echo "[$(date -Is)] splunk bootstrap complete"
+
+  # ------------------------------------------------------------------------
+  # Let's Encrypt installer for the HEC TLS cert. The installer body lives in
+  # S3 (uploaded by null_resource.upload_splunk_media in splunk_enterprise.tf)
+  # rather than being base64-embedded here, because the script is ~16 KB and
+  # inlining it pushed the rendered user_data past EC2's 16,384-byte hard
+  # limit, breaking `terraform plan`. Source of truth in the repo:
+  # scripts/lib/install_letsencrypt_hec.sh. Operators patching a running
+  # box out-of-band should use scripts/00d-install-letsencrypt-hec.sh -
+  # terraform's ignore_changes=[user_data] lifecycle means user_data edits
+  # alone do not flow into the existing instance.
+  - path: /opt/splunk-letsencrypt-bootstrap.sh
+    permissions: '0750'
+    owner: root:root
+    content: |
+      #!/usr/bin/env bash
+      set -Eeuo pipefail
+      LOG=/var/log/splunk-letsencrypt-bootstrap.log
+      exec > >(tee -a "$LOG") 2>&1
+      LE_ENABLED='${splunk_letsencrypt_enabled}'
+      LE_FQDN='${splunk_letsencrypt_fqdn}'
+      LE_EMAIL='${splunk_letsencrypt_email}'
+      LE_INSTALLER_S3='${splunk_letsencrypt_installer_s3}'
+      if [ "$LE_ENABLED" != "true" ]; then
+        echo "[le-bootstrap] letsencrypt disabled; skipping"
+        exit 0
+      fi
+      if [ -z "$LE_FQDN" ]; then
+        echo "[le-bootstrap] no FQDN supplied; skipping (set splunk_enterprise_dns_enabled=true)"
+        exit 0
+      fi
+      # Fetch the installer body from S3 (same bucket / IAM role as the
+      # Splunk media tarball - see splunk_enterprise.tf locals
+      # splunk_letsencrypt_installer_key).
+      aws s3 cp --quiet "$LE_INSTALLER_S3" /opt/splunk-letsencrypt-hec.sh
+      chmod 0750 /opt/splunk-letsencrypt-hec.sh
+      # The Splunk bootstrap above also writes /var/lib/splunk-bootstrap.done.
+      # Wait briefly for it so we don't race the first splunkd start.
+      for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do
+        [ -f /var/lib/splunk-bootstrap.done ] && break
+        sleep 5
+      done
+      FQDN="$LE_FQDN" EMAIL="$LE_EMAIL" /opt/splunk-letsencrypt-hec.sh
+
+runcmd:
+  - [ bash, -lc, "/opt/splunk-bootstrap.sh" ]
+  - [ bash, -lc, "/opt/splunk-letsencrypt-bootstrap.sh" ]

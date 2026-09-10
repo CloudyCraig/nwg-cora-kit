@@ -1,0 +1,194 @@
+{{- if .Values.networkPolicy.enabled }}
+{{- $appPort := .Values.defaults.port -}}
+{{- $redisPort := .Values.infrastructure.redis.port | default 6379 -}}
+{{- $redisExpPort := .Values.infrastructure.redis.exporter.port | default 9121 -}}
+{{- $pgPort := .Values.infrastructure.postgres.port | default 5432 -}}
+{{- $pgExpPort := .Values.infrastructure.postgres.exporter.port | default 9187 -}}
+{{- $kafkaPort := .Values.infrastructure.kafka.port | default 9092 -}}
+{{- $kafkaCtrlPort := .Values.infrastructure.kafka.controllerPort | default 9093 -}}
+{{- $kafkaExpPort := .Values.infrastructure.kafka.jmx.exporterPort | default 5556 -}}
+{{- $collectorNs := .Values.networkPolicy.collectorNamespace | default "splunk-otel" -}}
+---
+# Default-deny for all pods in the namespace
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+  namespace: {{ .Values.namespace }}
+spec:
+  podSelector: {}
+  policyTypes: ["Ingress", "Egress"]
+---
+# Allow intra-namespace HTTP between NatWest services + connections to the
+# in-cluster infrastructure (Redis, Postgres, Kafka). Each pod that needs DB
+# or cache access is part-of natwest-payments so this single policy covers all
+# of them; the per-port list keeps egress narrow.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-intra-natwest-http
+  namespace: {{ .Values.namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/part-of: natwest-payments
+  policyTypes: ["Ingress", "Egress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/part-of: natwest-payments
+      ports:
+        - protocol: TCP
+          port: {{ $appPort }}
+        - protocol: TCP
+          port: {{ $redisPort }}
+        - protocol: TCP
+          port: {{ $pgPort }}
+        - protocol: TCP
+          port: {{ $kafkaPort }}
+        - protocol: TCP
+          port: {{ $kafkaCtrlPort }}
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/part-of: natwest-payments
+      ports:
+        - protocol: TCP
+          port: {{ $appPort }}
+        - protocol: TCP
+          port: {{ $redisPort }}
+        - protocol: TCP
+          port: {{ $pgPort }}
+        - protocol: TCP
+          port: {{ $kafkaPort }}
+        - protocol: TCP
+          port: {{ $kafkaCtrlPort }}
+    # Allow DNS
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # Allow OTLP to the Splunk OTel Collector agent (runs on every node)
+    - ports:
+        - protocol: TCP
+          port: {{ .Values.otel.otlpGrpcPort }}
+        - protocol: TCP
+          port: {{ .Values.otel.otlpHttpPort }}
+---
+# Allow the Splunk OTel Collector (DaemonSet pods in the splunk-otel
+# namespace) to scrape the Prometheus-format metrics exposed by the
+# infra exporter sidecars (redis_exporter:9121, postgres_exporter:9187,
+# jmx_exporter:5556). Without this rule the default-deny ingress policy
+# above blocks the scrape and the redis/postgres/kafka L4 ITSI services
+# stay empty.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-collector-scrape
+  namespace: {{ .Values.namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/part-of: natwest-payments
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $collectorNs }}
+      ports:
+        - protocol: TCP
+          port: {{ $redisExpPort }}
+        - protocol: TCP
+          port: {{ $pgExpPort }}
+        - protocol: TCP
+          port: {{ $kafkaExpPort }}
+{{- if .Values.snowSimulator.enabled }}
+---
+# Allow ingress to the ServiceNow simulator pod on its HTTP port. The
+# pod is part-of natwest-payments so the intra-namespace allow rule
+# already covers cluster-internal callers (the ITSI alert bridge
+# webhook); this extra block opens it to NodePort/external callers
+# when serviceType=NodePort, mirroring the pattern used by
+# allow-frontend-ingress above.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-snow-simulator-ingress
+  namespace: {{ .Values.namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: snow-simulator
+  policyTypes: ["Ingress"]
+  ingress:
+    - ports:
+        - protocol: TCP
+          port: {{ .Values.snowSimulator.port | default 8080 }}
+{{- end }}
+{{- if .Values.soarSimulator.enabled }}
+---
+# Same shape as allow-snow-simulator-ingress: opens the SOAR
+# simulator's HTTP port to NodePort/external callers. The ITSI
+# correlation search posts to it via the in-cluster Service DNS
+# name (already covered by the intra-namespace policy above).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-soar-simulator-ingress
+  namespace: {{ .Values.namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: soar-simulator
+  policyTypes: ["Ingress"]
+  ingress:
+    - ports:
+        - protocol: TCP
+          port: {{ .Values.soarSimulator.port | default 8080 }}
+{{- end }}
+{{- if .Values.statusPage.enabled }}
+---
+# Public status page; opens its HTTP port to external callers when
+# serviceType=NodePort. The intra-namespace allow-listing also lets
+# the status page reach the snow-simulator's /api/now/v1/incidents
+# endpoint inside the cluster.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-status-page-ingress
+  namespace: {{ .Values.namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: status-page
+  policyTypes: ["Ingress"]
+  ingress:
+    - ports:
+        - protocol: TCP
+          port: {{ .Values.statusPage.port | default 8080 }}
+{{- end }}
+{{- if .Values.frontend.enabled }}
+---
+# Allow public ingress (LoadBalancer) -> web-frontend pods on the SPA port
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-frontend-ingress
+  namespace: {{ .Values.namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: web-frontend
+  policyTypes: ["Ingress"]
+  ingress:
+    - ports:
+        - protocol: TCP
+          port: {{ .Values.frontend.service.targetPort | default 8080 }}
+{{- end }}
+{{- end }}

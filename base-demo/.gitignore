@@ -1,0 +1,78 @@
+.DS_Store
+.env
+.env.*
+.idea/
+.vscode/
+__pycache__/
+*.pyc
+
+# Node / frontend build outputs
+node_modules/
+frontend/dist/
+frontend/build/
+*.tsbuildinfo
+
+# Java / Gradle / Maven build outputs
+target/
+build/
+.gradle/
+*.class
+
+# Terraform state, plan artefacts, and any provider-bound secrets
+terraform/.terraform/
+terraform/.terraform.lock.hcl
+terraform/terraform.tfstate
+terraform/terraform.tfstate.backup
+terraform/terraform.tfstate.*.backup
+terraform/terraform.tfvars
+terraform/*.tfplan
+terraform/*.auto.tfvars
+
+# SSH / TLS material - never commit
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+terraform/splunk-enterprise.pem
+.loc-splunk-common-ca.pem
+
+# Local credential blobs
+observability-creds
+kubeconfig*
+secrets/
+!secrets/.gitkeep
+!secrets/*.example
+te-state.json
+
+# Generated ITSI native Glass Table envelope (rebuilt by
+# scripts/lib/glass_table_convert.py on every bootstrap run; source of truth
+# is itsi/glass-table/natwest-payments-overview.xml).
+itsi/glass-table/*.glass-table.json
+
+# Rendered presentation artefacts (source of truth lives in SLIDES.md or
+# in scripts/generate-deck.py SLIDES lists; regenerate with
+# `python3 scripts/generate-deck.py [--profile engineer|exec-topdown]` or
+# `npx @marp-team/marp-cli@latest docs/presentation/SLIDES.md
+# -o docs/presentation/slides.pptx`).
+docs/presentation/slides.pptx
+docs/presentation/slides-exec-topdown.pptx
+docs/presentation/slides.pdf
+docs/presentation/slides.html
+
+# Captured UI screenshots embedded by scripts/generate-deck.py
+# --profile exec-topdown. Source of truth is the live Splunk demo;
+# regenerate with `scripts/capture-screenshots.py capture`.
+docs/presentation/screenshots/*.png
+
+# Customer deliverables rendered from markdown via pandoc.
+# Source of truth: the matching .md file in the same folder.
+# Regenerate with `scripts/render-customer-docs.sh` (needs `brew install pandoc`).
+docs/customer/*.docx
+docs/customer/*.pdf
+
+# Playwright browser cache for the storage-state observability flow.
+.playwright/
+
+# Local Python venv used by generate-deck.py / capture-screenshots.py.
+.venv/

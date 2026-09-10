@@ -1,0 +1,133 @@
+# nginx config for the web-frontend container. Templated by
+# `envsubst` at container start so the gateway URL and RUM token can be
+# injected at runtime without rebuilding the image. The corresponding
+# variables are: GATEWAY_URL, RUM_REALM, RUM_ACCESS_TOKEN, APP_NAME,
+# DEPLOYMENT_ENVIRONMENT.
+
+server {
+    listen 8080 default_server;
+    server_name _;
+
+    # Access log: JSON to stdout (nginx:alpine symlinks
+    # /var/log/nginx/access.log -> /dev/stdout, so this lands in the
+    # container log stream and is picked up by the OTel filelog receiver).
+    # The json_main format is defined in /etc/nginx/conf.d/00-log_format.conf.
+    # The collector routing rule in collector/values.yaml maps records
+    # whose k8s.container.name=web-frontend to
+    # com.splunk.index=nwpay_infra and com.splunk.sourcetype=nginx:access.
+    access_log /var/log/nginx/access.log json_main;
+    # Error log inherits the default plain-text format. sourcetype is
+    # nginx:error and the props.conf in cloud-init handles line merge.
+    error_log  /var/log/nginx/error.log warn;
+
+    # Tag every request with a unique id and propagate it upstream so the
+    # api-gateway can log-correlate without relying on the (optional)
+    # traceparent header that the SPA itself adds.
+    proxy_set_header X-Request-Id $request_id;
+
+    # Container is single-purpose; no upstream proxying needed beyond
+    # /api/* (handled below). Timeouts are tightened so a hung backend
+    # doesn't stall the browser indefinitely.
+    proxy_connect_timeout 5s;
+    proxy_read_timeout 30s;
+    proxy_send_timeout 5s;
+
+    # Security headers - the SPA is fully client-side rendered so a
+    # tight CSP is feasible. RUM beacons are sent to a Splunk realm
+    # endpoint, hence connect-src includes *.signalfx.com and
+    # *.splunkrum.com which the SDK uses.
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-Frame-Options "DENY" always;
+    add_header Referrer-Policy "no-referrer" always;
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' https://*.signalfx.com https://*.splunkrum.com https://rum-ingest.${RUM_REALM}.signalfx.com ${CSP_GATEWAY_ORIGIN}; img-src 'self' data:; font-src 'self' data:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'" always;
+
+    root /usr/share/nginx/html;
+    index index.html;
+
+    gzip on;
+    gzip_types text/css application/javascript application/json image/svg+xml;
+    gzip_min_length 1024;
+
+    # Runtime config rendered by docker-entrypoint.sh into a writable
+    # scratch path. Aliased here so the static html tree stays
+    # read-only. Cache-bust aggressively so a rolling restart picks up
+    # new tokens immediately.
+    location = /config.js {
+        add_header Cache-Control "no-store, no-cache, must-revalidate" always;
+        default_type application/javascript;
+        alias /var/run/web-frontend/config.js;
+    }
+
+    # Hashed Vite assets are immutable; long cache.
+    location /assets/ {
+        access_log off;
+        add_header Cache-Control "public, max-age=31536000, immutable" always;
+        try_files $uri =404;
+    }
+
+    # Optional same-origin proxy to the api-gateway. Only used when the
+    # chart sets `frontend.gatewayProxy.enabled=true`; otherwise the SPA
+    # talks to the gateway's own LoadBalancer URL via CORS, and this
+    # location is unreachable.
+    location /api/ {
+        rewrite ^/api/(.*)$ /$1 break;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_pass http://api-gateway.${KUBERNETES_NAMESPACE}.svc.cluster.local:8080/;
+    }
+
+    # Same-origin reverse proxy for the Chaos Dashboard backend
+    # (chaos-controller Service in the natwest namespace). Keeping
+    # everything same-origin means:
+    #   * The Splunk RUM tracer's CORS trust list (configured in
+    #     rum.ts) stays narrow.
+    #   * The presenter token rides on a header rather than a URL,
+    #     and is never logged here (X-Chaos-Token is not in
+    #     log_format.conf).
+    # Using a `set $upstream ...` + `resolver` pattern means nginx
+    # defers DNS resolution to per-request (rather than at startup),
+    # so the SPA pod boots cleanly even when
+    # `chaosController.enabled=false`; calls to /chaos/api/* return
+    # 502 in that case, which the SPA renders as a benign banner.
+    # ``${NGINX_RESOLVER}`` is rendered from /etc/resolv.conf by
+    # docker-entrypoint.sh (CoreDNS clusterIP in EKS).
+    resolver ${NGINX_RESOLVER} valid=30s ipv6=off;
+    location /chaos/api/ {
+        set $chaos_upstream http://${CHAOS_CONTROLLER_HOST}:${CHAOS_CONTROLLER_PORT};
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Request-Id $request_id;
+        proxy_read_timeout 30s;
+        proxy_pass $chaos_upstream;
+    }
+
+    # Same-origin proxy for the Cora AI assistant backend (cora-agent
+    # Service in the natwest namespace). Uses the same deferred-DNS
+    # resolver pattern as /chaos/api/ so the pod boots cleanly when
+    # cora-agent is absent; the widget renders a friendly "Cora is
+    # unavailable" note on 502.
+    location /cora/api/ {
+        set $cora_upstream http://${CORA_BACKEND_HOST}:${CORA_BACKEND_PORT};
+        rewrite ^/cora/api/(.*)$ /$1 break;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Request-Id $request_id;
+        # Cora's LLM round-trip runs 1-4s; give it headroom beyond the
+        # server-wide 30s default without loosening other routes.
+        proxy_read_timeout 60s;
+        proxy_pass $cora_upstream;
+    }
+
+    location = /healthz {
+        access_log off;
+        default_type text/plain;
+        return 200 "ok\n";
+    }
+
+    # SPA fallback - React Router owns all non-asset paths.
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+}

@@ -1,0 +1,162 @@
+{
+  "_key": "natwest_payments_episode_policy",
+  "object_type": "notable_event_aggregation_policy",
+  "title": "[NatWest demo] Payments - group related notable events",
+  "description": "Roll up notable events from BOTH the Splunk Observability detectors (forwarded via the o11y -> ITSI bridge correlation search) AND the Splunk ES correlation searches (excessive declines per tier, Madrid p95 latency breach, every chaos inject/clear, off-window chaos compliance overlay, SPA network connection changes, api-gateway 5xx rate, per-service p99 SLO breaches, ledger-service JDBC error storms, settlement-service consumer idle) into a single Episode per service per 30-minute window. The demo's story: detection from spans + detection from the banking audit log + detection from the chaos audit log + browser-side audit signals are independent signals about ONE incident. Without a grouping policy each signal opens a separate ticket; with this policy Episode Review shows the operator a single Episode with the attached notables, which is the desired SOC-on-stage flow.\n\nCoverage matrix (which orig_source value each correlation search uses):\n  - Splunk Observability Cloud      <- o11y_to_itsi.json (detector firings forwarded via webhook bridge)\n  - Splunk ES - payments audit      <- payments_excessive_declines_by_tier.json\n  - Splunk ES - chaos audit         <- chaos_injection_audit.json + chaos_off_change_window.json\n  - Splunk ES - payments OTel       <- payments_madrid_latency_breach.json + payments_api_gateway_5xx_breach.json + payments_service_latency_slo_breach.json + payments_ledger_jdbc_errors.json + payments_settlement_consumer_idle.json\n  - Splunk ES - SPA network audit   <- spa_network_connection_changed.json\n\nGroup mechanic:\n  split_by_field = service                     (every notable carries 'service'='<L2 tile>')\n  episode breaks  = 1800s with no new notable  (30 minutes of silence)\n  on break + >=1 event -> resolve              (auto-closed)\n\nIMPORTANT - filter field is 'orig_source', NOT 'source'. ITSI's event\ngenerator automatically overwrites the user-supplied 'source' (set by\n'action.itsi_event_generator.param.source = $result.source$' in the\ncorrelation search) with the saved-search name (e.g. '[NatWest demo]\nChaos injection audit') at notable-creation time, and moves the\noriginal value to 'orig_source'. Filtering on 'source' would never\nmatch our intended source classification; always use 'orig_source' on\nthe policy + on any glass-table or Episode Review query that wants to\npivot by 'where the notable came from'.\n\nSchema is the ITSI 4.20+ shape: criteria/actions are now arrays of typed items with an explicit condition, not the older flat clause/condition pairs. This file is consumed by scripts/lib/itsi_bootstrap.py which POSTs it to SA-ITOA/event_management_interface/notable_event_aggregation_policy (NOT itoa_interface - that endpoint 404s for this object type).\n\nFollow-up: on the live tenant the policy is registered and reads back enabled (disabled=0), but the ITSI notable-event aggregator does not materialise grouped alerts into index=itsi_grouped_alerts for our notables, so the 'Active payments episodes' panel will read zero until the aggregator picks the policy up after a Splunk app restart (or until ITSI's internal aggregator schedule fires for our security group). Notables themselves continue to surface fine in the 'Active payments incident -- notable events' panel and in Episode Review's notable-event view, which is the primary demo signal. Re-validate by hitting Configuration -> Event Management -> Aggregation Policies in the UI and clicking Save to nudge the engine if grouping is needed live.",
+  "disabled": 0,
+  "priority": 5,
+  "split_by_field": "service",
+  "sec_grp": "default_itsi_security_group",
+  "group_severity": "info",
+  "group_status": "1",
+  "group_title": "Payments incident on %service%",
+  "group_description": "Grouped from notable events across sources Splunk Observability Cloud, Splunk ES - payments audit, Splunk ES - chaos audit, Splunk ES - payments OTel.",
+  "ace_enabled": 0,
+  "service_topology_enabled": 0,
+  "entity_factor_enabled": 0,
+  "filter_criteria": {
+    "items": [
+      {
+        "type": "clause",
+        "config": {
+          "items": [
+            {
+              "type": "notable_event_field",
+              "config": {
+                "field": "orig_source",
+                "operator": "=",
+                "value": "Splunk Observability Cloud"
+              }
+            },
+            {
+              "type": "notable_event_field",
+              "config": {
+                "field": "orig_source",
+                "operator": "=",
+                "value": "Splunk ES - payments audit"
+              }
+            },
+            {
+              "type": "notable_event_field",
+              "config": {
+                "field": "orig_source",
+                "operator": "=",
+                "value": "Splunk ES - chaos audit"
+              }
+            },
+            {
+              "type": "notable_event_field",
+              "config": {
+                "field": "orig_source",
+                "operator": "=",
+                "value": "Splunk ES - payments OTel"
+              }
+            },
+            {
+              "type": "notable_event_field",
+              "config": {
+                "field": "orig_source",
+                "operator": "=",
+                "value": "Splunk ES - SPA network audit"
+              }
+            }
+          ],
+          "condition": "OR"
+        }
+      }
+    ],
+    "condition": "AND"
+  },
+  "breaking_criteria": {
+    "items": [
+      {
+        "type": "pause",
+        "config": {
+          "limit": "1800"
+        }
+      }
+    ],
+    "condition": "OR"
+  },
+  "rules": [
+    {
+      "_key": "natwest_payments_discard_singleton",
+      "title": "Resolve orphaned singleton episodes after 5 minutes",
+      "description": "A service-axis episode with only one notable and no follow-on events for 5 minutes is noise (e.g. a lone audit correlation before the chaos cascade arrives). Auto-resolve so Episode Review stays focused on multi-signal incidents.",
+      "priority": 10,
+      "activation_criteria": {
+        "items": [
+          {
+            "type": "notable_event_count",
+            "config": {
+              "operator": "<=",
+              "limit": "1"
+            }
+          },
+          {
+            "type": "pause",
+            "config": {
+              "limit": "300"
+            }
+          }
+        ],
+        "condition": "AND"
+      },
+      "actions": [
+        {
+          "items": [
+            {
+              "type": "notable_event_change",
+              "config": {
+                "field": "status",
+                "value": "5"
+              },
+              "execution_criteria": {
+                "execute_on": "GROUP"
+              }
+            }
+          ],
+          "condition": "AND"
+        }
+      ]
+    },
+    {
+      "_key": "natwest_payments_episode_rule_close_when_broken",
+      "title": "Resolve episode when broken with at least one event",
+      "description": "When the 30-minute pause triggers a break AND the episode received at least one notable, flip status to Resolved. Avoids carry-over tickets when the underlying chaos has already cleared.",
+      "priority": 5,
+      "activation_criteria": {
+        "items": [
+          {
+            "type": "breaking_criteria"
+          },
+          {
+            "type": "notable_event_count",
+            "config": {
+              "operator": ">=",
+              "limit": "1"
+            }
+          }
+        ],
+        "condition": "AND"
+      },
+      "actions": [
+        {
+          "items": [
+            {
+              "type": "notable_event_change",
+              "config": {
+                "field": "status",
+                "value": "5"
+              },
+              "execution_criteria": {
+                "execute_on": "GROUP"
+              }
+            }
+          ],
+          "condition": "AND"
+        }
+      ]
+    }
+  ]
+}

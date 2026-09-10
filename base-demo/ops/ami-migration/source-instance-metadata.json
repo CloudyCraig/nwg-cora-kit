@@ -1,0 +1,20 @@
+[
+    {
+        "arch": "x86_64",
+        "virt": "hvm",
+        "ena": true,
+        "rootDev": "/dev/xvda",
+        "bdm": [
+            {
+                "DeviceName": "/dev/xvda",
+                "Ebs": {
+                    "AttachTime": "2026-04-27T09:58:30+00:00",
+                    "DeleteOnTermination": true,
+                    "Status": "attached",
+                    "VolumeId": "vol-0f129b8e9ec71fe98",
+                    "EbsCardIndex": 0
+                }
+            }
+        ]
+    }
+]

@@ -1,0 +1,67 @@
+{
+  "_comment": "Per-panel capture spec for the C-level top-down deck. Each entry maps to one slide. 'surface' selects the auth flow: 'enterprise' = Splunk Web (form login, password from TF_VAR_splunk_enterprise_admin_password) and 'observability' = Splunk Observability Cloud (requires a Playwright storage-state file produced once by 'scripts/capture-screenshots.py login --surface observability'). 'wait_selector' is the CSS selector we block on until the dashboard renders; if absent we fall back to network-idle. 'scroll_to_selector' is used to scroll a section into view before the screenshot for cropped panel shots.",
+  "panels": [
+    {
+      "id": "slide-05-overview-glass-table",
+      "slide_layout_section": "0:02-0:07",
+      "surface": "enterprise",
+      "url_path": "/en-US/app/itsi/glass_table?savedGlassTableId=nwpay_glass_table_overview&action=view",
+      "viewport": {"width": 1920, "height": 1200},
+      "wait_selector": "svg, canvas, .glass-table-viewer, .gridster, .ScrollView",
+      "settle_ms": 12000,
+      "full_page": false
+    },
+    {
+      "id": "slide-06-episode-review",
+      "slide_layout_section": "0:07-0:10",
+      "surface": "enterprise",
+      "url_path": "/en-US/app/itsi/alerts_and_episodes",
+      "viewport": {"width": 1920, "height": 1200},
+      "wait_selector": "table, .react-list-view, .episode-review-table, .alerts-and-episodes",
+      "settle_ms": 8000,
+      "full_page": false
+    },
+    {
+      "id": "slide-07-apm-service-map",
+      "slide_layout_section": "0:10-0:16",
+      "surface": "observability",
+      "url_path": "/#/apm/troubleshooting?environment=demo",
+      "viewport": {"width": 1920, "height": 1200},
+      "wait_selector": "[data-testid='service-map'], svg.service-map, .apm-service-map",
+      "settle_ms": 8000,
+      "full_page": false
+    },
+    {
+      "id": "slide-10-rum-overview",
+      "slide_layout_section": "0:17-0:21",
+      "surface": "observability",
+      "url_path": "/#/rum/overview?environment=demo&app=natwest-payments-web",
+      "viewport": {"width": 1920, "height": 1200},
+      "wait_selector": "[data-testid='rum-overview'], .rum-overview, .frustration-signals",
+      "settle_ms": 8000,
+      "full_page": false
+    },
+    {
+      "id": "slide-11-glass-table-thousandeyes",
+      "slide_layout_section": "0:21-0:25",
+      "surface": "enterprise",
+      "url_path": "/en-US/app/itsi/glass_table?savedGlassTableId=nwpay_glass_table_overview&action=view",
+      "viewport": {"width": 1920, "height": 1200},
+      "wait_selector": "svg, canvas, .glass-table-viewer, .gridster, .ScrollView",
+      "settle_ms": 12000,
+      "scroll_to_selector": "text=ThousandEyes,text=Network loss,text=Network latency by agent",
+      "full_page": false
+    },
+    {
+      "id": "slide-12-slo-burn",
+      "slide_layout_section": "0:25-0:27",
+      "surface": "enterprise",
+      "url_path": "/en-US/app/itsi/glass_table?savedGlassTableId=nwpay_glass_table_overview&action=view",
+      "viewport": {"width": 1920, "height": 1200},
+      "wait_selector": "svg, canvas, .glass-table-viewer, .gridster, .ScrollView",
+      "settle_ms": 12000,
+      "scroll_to_selector": "text=SLO 1h fast-burn,text=Active SLO breach,text=SLO",
+      "full_page": false
+    }
+  ]
+}

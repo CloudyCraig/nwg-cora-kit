@@ -1,0 +1,121 @@
+ M .gitignore
+ M Makefile
+ M Natwest-payment-architecture-may-2026.png
+MM README.md
+ M app/Dockerfile
+ M app/audit.py
+ M app/requirements.txt
+ M app/service.py
+ M app/test_audit.py
+ M chaos-controller/Dockerfile
+ M chaos-controller/app/__init__.py
+ M chaos-controller/app/_schema.py
+ M chaos-controller/app/audit.py
+ M chaos-controller/app/auth.py
+ M chaos-controller/app/k8s.py
+ M chaos-controller/app/main.py
+ M chaos-controller/app/o11y_events.py
+ M chaos-controller/app/orchestrators.py
+ M chaos-controller/app/scenarios.py
+ M chaos-controller/requirements.txt
+MM collector/values.yaml
+ M docs/customer/chaos-events-overlay.md
+ M docs/customer/path-to-green-requirements-v1.1.md
+ M docs/customer/path-to-green.md
+ M docs/customer/story-rum-apm-postgres.md
+D  docs/operations/infra-logs-loc.md
+ M docs/operations/metricsets.md
+ M docs/presentation/DEMO_DECK_TALK_TRACK.md
+ M docs/presentation/EXEC_DEMO_30MIN_TOPDOWN.md
+ M docs/presentation/README.md
+ M docs/presentation/SLIDES.md
+ M docs/presentation/TALK_TRACK.md
+ M docs/presentation/build_pptx.py
+ M docs/presentation/natwest-splunk-demo.pptx
+ M docs/presentation/natwest-splunk-itsi.pptx
+ M frontend/nginx/default.conf.template
+ M frontend/nginx/docker-entrypoint.sh
+ M frontend/package-lock.json
+ M frontend/src/accounts.ts
+ M frontend/src/chaos.ts
+ M frontend/src/components/ErrorBoundary.tsx
+ M frontend/src/components/PresenterHUD.tsx
+ M frontend/src/components/StatusPill.tsx
+ M frontend/src/components/TraceLink.tsx
+ M frontend/src/format.ts
+ M frontend/src/pages/Home.tsx
+ M frontend/src/pages/Ops.tsx
+ M frontend/src/pages/SendMoney.tsx
+ M frontend/src/payees.ts
+ M frontend/src/personas.ts
+ M frontend/src/rum.ts
+ M frontend/src/styles.css
+ M helm/natwest-payments/templates/chaos-controller-rbac.yaml
+ M helm/natwest-payments/templates/chaos-controller-secret.yaml
+ M helm/natwest-payments/templates/chaos-controller.yaml
+ M helm/natwest-payments/templates/deployment.yaml
+MM helm/natwest-payments/templates/kafka.yaml
+MM helm/natwest-payments/templates/postgres.yaml
+MM helm/natwest-payments/templates/redis.yaml
+ M helm/natwest-payments/values.yaml
+MM itsi/README.md
+ M itsi/aggregation-policies/payments_episode_policy.json
+ M itsi/correlation-searches/chaos_injection_audit.json
+ M itsi/correlation-searches/chaos_off_change_window.json
+ M itsi/correlation-searches/payments_api_gateway_5xx_breach.json
+ M itsi/correlation-searches/payments_excessive_declines_by_tier.json
+ M itsi/correlation-searches/payments_ledger_jdbc_errors.json
+ M itsi/correlation-searches/payments_madrid_latency_breach.json
+ M itsi/correlation-searches/payments_service_latency_slo_breach.json
+ M itsi/correlation-searches/payments_settlement_consumer_idle.json
+ M itsi/correlation-searches/spa_network_connection_changed.json
+ M itsi/service-tree.yaml
+ M scripts/00-preflight.sh
+MM scripts/00b-update-splunk-config.sh
+ M scripts/01-build-push.sh
+ M scripts/03-deploy.sh
+ M scripts/04-start-traffic.sh
+ M scripts/05-deploy-frontend.sh
+MM scripts/11-verify-logs.sh
+ M scripts/incident.sh
+ M scripts/lib/bootstrap_loc_user.sh
+ M scripts/lib/exec_topdown_screenshots.json
+ M scripts/lib/itsi_bootstrap.py
+MM scripts/lib/itsi_data_probe.sh
+ M scripts/lib/metricsets.json
+ M scripts/lib/spa_obs_rest.py
+ M scripts/resize-splunk-enterprise-ec2.sh
+ M splunk-apps/leaflet_maps_server/LICENSE
+ M splunk-apps/leaflet_maps_server/appserver/static/world_countries.svg
+ M splunk-apps/leaflet_maps_server/default/app.conf
+ M splunk-apps/leaflet_maps_server/metadata/default.meta
+MM terraform/cloud-init/splunk-enterprise.tftpl
+ M terraform/teams_alert_bridge.tf
+ M terraform/terraform.tfvars.example
+ M terraform/variables.tf
+ M traffic-generator/Dockerfile
+ M traffic-generator/deployment.yaml
+ M traffic-generator/generate.py
+ M traffic-generator/requirements.txt
+?? chaos-controller/app/scenarios-CGORMAN-M-36CX.py
+?? chaos-controller/app/scenarios-MSERIEYS-M-L43W.py
+?? "cursor-admin_accessKeys (1)(1).csv"
+?? docs/customer/story-rum-apm-postgres-CGORMAN-M-36CX.md
+?? docs/operations/chaos-scenario-test-results.docx
+?? docs/operations/chaos-scenario-test-results.json
+?? docs/operations/chaos-scenario-test-results.md
+?? docs/operations/infra-logs-loc.md
+?? frontend/src/components/CoraChat.tsx
+?? frontend/src/components/CoraTrafficCard.tsx
+?? frontend/src/storyDemo.ts
+?? helm/natwest-payments/templates/rum-user-simulator.yaml
+?? itsi/aggregation-policies/payments_location_episode_policy.json
+?? ops/
+?? rum-user-simulator/
+?? scripts/05f-configure-loc.sh
+?? scripts/08-repair-apm-topology.sh
+?? scripts/chaos-scenario-marathon.py
+?? scripts/generate-chaos-marathon-docx.py
+?? scripts/lib/apm_topology_repair.sh
+?? scripts/lib/te_test_payloads/TE-07-api-post-process-madrid-aml.json
+?? scripts/lib/verify_apm_topology.py

@@ -1,0 +1,19 @@
+{
+  "<<REDACTED-TOKEN>>",
+  "description": "DNS Server test that resolves the demo hostname against public resolvers (Cloudflare 1.1.1.1, Google 8.8.8.8, Quad9 9.9.9.9). Surfaces DNS-layer failure modes - delegation breakage, TTL anomalies, NXDOMAIN floods - that look like 'the app is down' to a customer but never show up in app-level metrics.",
+  "type": "dns-server",
+  "interval": 300,
+  "domain": "${DEMO_HOSTNAME} A",
+  "dnsServers": [
+    "1.1.1.1",
+    "8.8.8.8",
+    "9.9.9.9"
+  ],
+  "dnsTransportProtocol": "UDP",
+  "networkMeasurements": false,
+  "mtuMeasurements": false,
+  "bandwidthMeasurements": false,
+  "bgpMeasurements": false,
+  "agents": ${AGENTS_5},
+  "alertsEnabled": true
+}

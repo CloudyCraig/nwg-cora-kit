@@ -1,0 +1,174 @@
+{
+  "_key": "natwest_payments_location_episode_policy",
+  "object_type": "notable_event_aggregation_policy",
+  "title": "[NatWest demo] Payments by location - regional customer experience storyline",
+  "description": "Groups notables by customer_location into regional storyline episodes (e.g. 'Customer experience storyline: madrid'). Complements natwest_payments_episode_policy which groups by service. Excludes ThousandEyes synthetic notables: those are single-signal probes and must not open a regional storyline episode on their own.",
+  "disabled": 0,
+  "priority": 6,
+  "split_by_field": "customer_location",
+  "sec_grp": "default_itsi_security_group",
+  "group_severity": "5",
+  "group_status": "1",
+  "group_title": "Customer experience storyline: %customer_location%",
+  "group_description": "Cross-source episode for %customer_location% - grouped from notable events across client RTT, backend latency, error logs, Splunk Observability detectors, and chaos scenarios.",
+  "ace_enabled": 0,
+  "service_topology_enabled": 0,
+  "entity_factor_enabled": 0,
+  "filter_criteria": {
+    "items": [
+      {
+        "type": "clause",
+        "config": {
+          "items": [
+            {
+              "type": "notable_event_field",
+              "config": {
+                "field": "customer_location",
+                "operator": "!=",
+                "value": ""
+              }
+            },
+            {
+              "type": "notable_event_field",
+              "config": {
+                "field": "orig_source",
+                "operator": "!=",
+                "value": "Splunk ES - ThousandEyes synthetic"
+              }
+            }
+          ],
+          "condition": "AND"
+        }
+      }
+    ],
+    "condition": "AND"
+  },
+  "breaking_criteria": {
+    "items": [
+      {
+        "type": "pause",
+        "config": {
+          "limit": "1200"
+        }
+      }
+    ],
+    "condition": "OR"
+  },
+  "rules": [
+    {
+      "_key": "natwest_payments_location_discard_singleton",
+      "title": "Resolve orphaned singleton episodes after 5 minutes",
+      "description": "A regional episode with only one notable and no follow-on events for 5 minutes is noise. Auto-resolve so Episode Review stays focused on multi-signal incidents.",
+      "priority": 10,
+      "activation_criteria": {
+        "items": [
+          {
+            "type": "notable_event_count",
+            "config": {
+              "operator": "<=",
+              "limit": "1"
+            }
+          },
+          {
+            "type": "pause",
+            "config": {
+              "limit": "300"
+            }
+          }
+        ],
+        "condition": "AND"
+      },
+      "actions": [
+        {
+          "items": [
+            {
+              "type": "notable_event_change",
+              "config": {
+                "field": "status",
+                "value": "5"
+              },
+              "execution_criteria": {
+                "execute_on": "GROUP"
+              }
+            }
+          ],
+          "condition": "AND"
+        }
+      ]
+    },
+    {
+      "_key": "natwest_payments_location_escalate_on_storyline",
+      "title": "Escalate to Critical when the cross-source storyline notable arrives",
+      "description": "Multi-source confirmation that this region is in genuine trouble. Bump the whole episode to severity Critical.",
+      "priority": 5,
+      "activation_criteria": {
+        "items": [
+          {
+            "type": "notable_event_field",
+            "config": {
+              "field": "source",
+              "operator": "=",
+              "value": "Splunk ES - cross-source storyline"
+            }
+          }
+        ],
+        "condition": "AND"
+      },
+      "actions": [
+        {
+          "items": [
+            {
+              "type": "notable_event_change",
+              "config": {
+                "field": "severity",
+                "value": "6"
+              },
+              "execution_criteria": {
+                "execute_on": "GROUP"
+              }
+            }
+          ],
+          "condition": "AND"
+        }
+      ]
+    },
+    {
+      "_key": "natwest_payments_location_close_when_broken",
+      "title": "Resolve episode when broken with at least one event",
+      "description": "When the 20-minute pause triggers a break AND the episode received at least one notable, flip status to Resolved.",
+      "priority": 5,
+      "activation_criteria": {
+        "items": [
+          {
+            "type": "breaking_criteria"
+          },
+          {
+            "type": "notable_event_count",
+            "config": {
+              "operator": ">=",
+              "limit": "1"
+            }
+          }
+        ],
+        "condition": "AND"
+      },
+      "actions": [
+        {
+          "items": [
+            {
+              "type": "notable_event_change",
+              "config": {
+                "field": "status",
+                "value": "5"
+              },
+              "execution_criteria": {
+                "execute_on": "GROUP"
+              }
+            }
+          ],
+          "condition": "AND"
+        }
+      ]
+    }
+  ]
+}

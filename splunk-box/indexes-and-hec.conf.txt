@@ -1,0 +1,105 @@
+=== /opt/splunk/etc/apps/search/local/indexes.conf
+[thousandeyes]
+coldPath = $SPLUNK_DB/thousandeyes/colddb
+homePath = $SPLUNK_DB/thousandeyes/db
+thawedPath = $SPLUNK_DB/thousandeyes/thaweddb
+frozenTimePeriodInSecs = 2592000
+
+[otel_traces]
+coldPath = $SPLUNK_DB/otel_traces/colddb
+frozenTimePeriodInSecs = 259200
+homePath = $SPLUNK_DB/otel_traces/db
+maxHotBuckets = 10
+maxTotalDataSizeMB = 10240
+thawedPath = $SPLUNK_DB/otel_traces/thaweddb
+=== /opt/splunk/etc/system/local/indexes.conf
+[_internal]
+maxTotalDataSizeMB = 20000
+
+[main]
+frozenTimePeriodInSecs = 1209600
+maxTotalDataSizeMB = 40000
+
+[_introspection]
+frozenTimePeriodInSecs = 604800
+maxTotalDataSizeMB = 5000
+
+[_audit]
+frozenTimePeriodInSecs = 1209600
+maxTotalDataSizeMB = 5000
+=== /opt/splunk/etc/apps/SA-IndexCreation/local/indexes.conf
+[itsi_summary]
+frozenTimePeriodInSecs = 1209600
+
+[itsi_tracked_alerts]
+frozenTimePeriodInSecs = 2592000
+
+[itsi_grouped_alerts]
+frozenTimePeriodInSecs = 2592000
+
+[itsi_nats_metrics]
+frozenTimePeriodInSecs = 2592000
+
+[itsi_im_metrics]
+frozenTimePeriodInSecs = 2592000
+maxTotalDataSizeMB = 15000
+=== /opt/splunk/etc/apps/natwest_demo_inputs/local/indexes.conf
+[nwpay_audit]
+homePath   = $SPLUNK_DB/nwpay_audit/db
+coldPath   = $SPLUNK_DB/nwpay_audit/colddb
+thawedPath = $SPLUNK_DB/nwpay_audit/thaweddb
+maxTotalDataSizeMB = 5120
+frozenTimePeriodInSecs = 604800
+
+[nwpay_infra]
+homePath   = $SPLUNK_DB/nwpay_infra/db
+coldPath   = $SPLUNK_DB/nwpay_infra/colddb
+thawedPath = $SPLUNK_DB/nwpay_infra/thaweddb
+maxTotalDataSizeMB = 5120
+frozenTimePeriodInSecs = 604800
+=== /opt/splunk/etc/apps/search/local/indexes.conf
+[thousandeyes]
+coldPath = $SPLUNK_DB/thousandeyes/colddb
+homePath = $SPLUNK_DB/thousandeyes/db
+thawedPath = $SPLUNK_DB/thousandeyes/thaweddb
+frozenTimePeriodInSecs = 2592000
+
+[otel_traces]
+coldPath = $SPLUNK_DB/otel_traces/colddb
+frozenTimePeriodInSecs = 259200
+homePath = $SPLUNK_DB/otel_traces/db
+maxHotBuckets = 10
+maxTotalDataSizeMB = 10240
+thawedPath = $SPLUNK_DB/otel_traces/thaweddb
+===HEC===
+[http]
+disabled = 0
+[http://otel-collector]
+disabled = 0
+indexes = main, _internal, itsi_im_metrics, otel_traces, nwpay_audit, nwpay_infra
+index = main
+[http://te-stream-metrics]
+disabled = 0
+index = thousandeyes
+indexes = thousandeyes
+[http://te-stream-traces]
+disabled = 0
+index = thousandeyes
+indexes = thousandeyes
+[http://te-stream-alerts]
+disabled = 0
+index = thousandeyes
+indexes = thousandeyes
+[http://te-stream-activity]
+disabled = 0
+index = thousandeyes
+indexes = thousandeyes
+[http://aws-firehose]
+disabled = 0
+indexes = aws_cloudtrail, aws_vpcflow, aws_guardduty, aws_eks_audit
+index = aws_cloudtrail
+[http://demo-scripts]
+disabled = 0
+indexes = nwpay_audit
+index = nwpay_audit
+

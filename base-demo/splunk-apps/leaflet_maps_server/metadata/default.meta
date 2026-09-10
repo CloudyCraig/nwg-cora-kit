@@ -1,0 +1,6 @@
+# Make the SVG asset globally readable so it can be requested by anyone
+# loading a Glass Table that references it. The app itself is hidden from
+# the Splunk Web nav (app.conf: ui.is_visible=false).
+[]
+access = read : [ * ], write : [ admin, sc_admin ]
+export = system

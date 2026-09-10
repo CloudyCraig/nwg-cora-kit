@@ -1,0 +1,1852 @@
+{
+  "run": {
+    "started_at": "2026-06-20T10:55:43Z",
+    "ended_at": "2026-06-20T18:10:18Z",
+    "dwell_s": 1200,
+    "settle_s": 120,
+    "scenario_ids": [
+      "latency-creep",
+      "madrid-network-degradation",
+      "fraud-cpu-regression",
+      "gold-fast-path-off",
+      "tier-throttle",
+      "cache-cold",
+      "sanctions-cache-disabled",
+      "bad-deploy-fraud",
+      "swift-counterparty-flap",
+      "swift-scheme-outage",
+      "db-slow",
+      "gateway-timeout-squeeze",
+      "settlement-producer-off",
+      "pod-restart-gateway",
+      "kill-service",
+      "bad-deploy-payment-initiation",
+      "redis-outage",
+      "kafka-outage",
+      "postgres-outage"
+    ]
+  },
+  "results": [
+    {
+      "id": "latency-creep",
+      "name": "Payment-status latency creep",
+      "category": "latency",
+      "severity": "low",
+      "target_service": "payment-status-service",
+      "inject_ok": true,
+      "inject_response": {
+        "action": "inject",
+        "params": {},
+        "result": {
+          "after": {
+            "LATENCY_MS_MEAN": "200"
+          },
+          "before": {
+            "LATENCY_MS_MEAN": "10"
+          },
+          "deployment": "payment-status-service"
+        },
+        "scenario_id": "latency-creep"
+      },
+      "clear_ok": true,
+      "clear_response": {
+        "action": "clear",
+        "result": {
+          "after": {
+            "LATENCY_MS_MEAN": "10"
+          },
+          "before": {
+            "LATENCY_MS_MEAN": "200"
+          },
+          "deployment": "payment-status-service"
+        },
+        "scenario_id": "latency-creep"
+      },
+      "status_after_inject": {
+        "observed": {
+          "LATENCY_MS_MEAN": "200",
+          "baseline": "10"
+        },
+        "state": "armed"
+      },
+      "status_after_clear": {
+        "observed": {
+          "LATENCY_MS_MEAN": "10",
+          "baseline": "10"
+        },
+        "state": "clear"
+      },
+      "started_at": "2026-06-20T10:57:15Z",
+      "ended_at": "2026-06-20T11:20:16Z",
+      "dwell_s": 1200,
+      "samples": [
+        {
+          "at_s": 300,
+          "gateway_5xx_pct": 0.0,
+          "gateway_requests": 33231,
+          "target_errors": 0,
+          "target_traces": 6292,
+          "target_p95_ms": null,
+          "pods_ready": "1/1"
+        },
+        {
+          "at_s": 600,
+          "gateway_5xx_pct": 0.0,
+          "gateway_requests": 33159,
+          "target_errors": 0,
+          "target_traces": 6428,
+          "target_p95_ms": null,
+          "pods_ready": "1/1"
+        },
+        {
+          "at_s": 900,
+          "gateway_5xx_pct": 0.0,
+          "gateway_requests": 35334,
+          "target_errors": 0,
+          "target_traces": 6309,
+          "target_p95_ms": null,
+          "pods_ready": "1/1"
+        },
+        {
+          "at_s": 1200,
+          "gateway_5xx_pct": 0.0,
+          "gateway_requests": 33644,
+          "target_errors": 1,
+          "target_traces": 6584,
+          "target_p95_ms": null,
+          "pods_ready": "1/1"
+        }
+      ],
+      "notes": [],
+      "outcome": "pass"
+    },
+    {
+      "id": "madrid-network-degradation",
+      "name": "Madrid network degradation",
+      "category": "latency",
+      "severity": "medium",
+      "target_service": "traffic-generator",
+      "inject_ok": true,
+      "inject_response": {
+        "action": "inject",
+        "params": {},
+        "result": {
+          "after": {
+            "LOCATION_LATENCY_PROFILES": "madrid:2000/400"
+          },
+          "before": {
+            "LOCATION_LATENCY_PROFILES": ""
+          },
+          "deployment": "traffic-generator"
+        },
+        "scenario_id": "madrid-network-degradation"
+      },
+      "clear_ok": true,
+      "clear_response": {
+        "action": "clear",
+        "result": {
+          "after": {
+            "LOCATION_LATENCY_PROFILES": ""
+          },
+          "before": {
+            "LOCATION_LATENCY_PROFILES": "madrid:2000/400"
+          },
+          "deployment": "traffic-generator"
+        },
+        "scenario_id": "madrid-network-degradation"
+      },
+      "status_after_inject": {
+        "observed": {
+          "LOCATION_LATENCY_PROFILES": "madrid:2000/400",
+          "baseline": ""
+        },
+        "state": "armed"
+      },
+      "status_after_clear": {
+        "observed": {
+          "LOCATION_LATENCY_PROFILES": "",
+          "baseline": ""
+        },
+        "state": "clear"
+      },
+      "started_at": "2026-06-20T11:20:16Z",
+      "ended_at": "2026-06-20T11:43:01Z",
+      "dwell_s": 1200,
+      "samples": [
+        {
+          "at_s": 300,
+          "gateway_5xx_pct": 0.0,
+          "gateway_requests": 36226,
+          "target_errors": 0,
+          "target_traces": 14841,
+          "target_p95_ms": null,
+          "pods_ready": "1/1"
+        },
+        {
+          "at_s": 600,
+          "gateway_5xx_pct": 0.0,
+          "gateway_requests": 36069,
+          "target_errors": 0,
+          "target_traces": 14633,
+          "target_p95_ms": null,
+          "pods_ready": "1/1"
+        },
+        {
+          "at_s": 900,
+          "gateway_5xx_pct": 0.0,
+          "gateway_requests": 35612,
+          "target_errors": 0,
+          "target_traces": 14645,
+          "target_p95_ms": null,
+          "pods_ready": "1/1"
+        },
+        {
+          "at_s": 1200,
+          "gateway_5xx_pct": 0.0,
+          "gateway_requests": 36145,
+          "target_errors": 0,
+          "target_traces": 14621,
+          "target_p95_ms": null,
+          "pods_ready": "1/1"
+        }
+      ],
+      "notes": [],
+      "outcome": "pass"
+    },
+    {
+      "id": "fraud-cpu-regression",
+      "name": "Fraud CPU regression",
+      "category": "latency",
+      "severity": "medium",
+      "target_service": "fraud-detection-service",
+      "inject_ok": true,
+      "inject_response": {
+        "action": "inject",
+        "params": {},
+        "result": {
+          "after": {
+            "CPU_REGRESSION_ENABLED": "true"
+          },
+          "before": {
+            "CPU_REGRESSION_ENABLED": "false"
+          },
+          "deployment": "fraud-detection-service"
+        },
+        "scenario_id": "fraud-cpu-regression"
+      },
+      "clear_ok": true,
+      "clear_response": {
+        "action": "clear",
+        "result": {
+          "after": {
+            "CPU_REGRESSION_ENABLED": "false"
+          },
+          "before": {
+            "CPU_REGRESSION_ENABLED": "true"
+          },
+          "deployment": "fraud-detection-service"
+        },
+        "scenario_id": "fraud-cpu-regression"
+      },
+      "status_after_inject": {
+        "observed": {
+          "CPU_REGRESSION_ENABLED": "true",
+          "baseline": "false"
+        },
+        "state": "armed"
+      },
+      "status_after_clear": {
+        "observed": {
+          "CPU_REGRESSION_ENABLED": "false",
+          "baseline": "false"
+        },
+        "state": "clear"
+      },
+      "started_at": "2026-06-20T11:43:01Z",
+      "ended_at": "2026-06-20T12:05:47Z",
+      "dwell_s": 1200,
+      "samples": [
+        {
+          "at_s": 300,
+          "gateway_5xx_pct": 0.0,
+          "gateway_requests": 24810,
+          "target_errors": 90,
+          "target_traces": 13955,
+          "target_p95_ms": null,
+          "pods_ready": "1/1"
+        },
+        {
+          "at_s": 600,
+          "gateway_5xx_pct": 0.0,
+          "gateway_requests": 23964,
+          "target_errors": 91,
+          "target_traces": 14164,
+          "target_p95_ms": null,
+          "pods_ready": "1/1"
+        },
+        {
+          "at_s": 900,
+          "gateway_5xx_pct": 0.0,
+          "gateway_requests": 24306,
+          "target_errors": 94,
+          "target_traces": 13984,
+          "target_p95_ms": null,
+          "pods_ready": "1/1"
+        },
+        {
+          "at_s": 1200,
+          "gateway_5xx_pct": 0.0,
+          "gateway_requests": 24074,
+          "target_errors": 95,
+          "target_traces": 14189,
+          "target_p95_ms": null,
+          "pods_ready": "1/1"
+        }
+      ],
+      "notes": [],
+      "outcome": "pass"
+    },
+    {
+      "id": "gold-fast-path-off",
+      "name": "Gold fast-path disabled",
+      "category": "tier",
+      "severity": "medium",
+      "target_service": "fraud-detection-service",
+      "inject_ok": true,
+      "inject_response": {
+        "action": "inject",
+        "params": {},
+        "result": {
+          "after": {
+            "TIER_FRAUD_FAST_PATH_PROB": "bronze:0.0,silver:0.2,gold:0.0",
+            "TIER_FRAUD_SLOW_PATH_PENALTY_MS": "bronze:0,silver:0,gold:800"
+          },
+          "before": {
+            "TIER_FRAUD_FAST_PATH_PROB": "bronze:0.0,silver:0.2,gold:0.6",
+            "TIER_FRAUD_SLOW_PATH_PENALTY_MS": "bronze:0,silver:0,gold:0"
+          },
+          "deployment": "fraud-detection-service"
+        },
+        "scenario_id": "gold-fast-path-off"
+      },
+      "clear_ok": true,
+      "clear_response": {
+        "action": "clear",
+        "result": {
+          "after": {
+            "TIER_FRAUD_FAST_PATH_PROB": "bronze:0.0,silver:0.2,gold:0.6",
+            "TIER_FRAUD_SLOW_PATH_PENALTY_MS": "bronze:0,silver:0,gold:0"
+          },
+          "before": {
+            "TIER_FRAUD_FAST_PATH_PROB": "bronze:0.0,silver:0.2,gold:0.0",
+            "TIER_FRAUD_SLOW_PATH_PENALTY_MS": "bronze:0,silver:0,gold:800"
+          },
+          "deployment": "fraud-detection-service"
+        },
+        "scenario_id": "gold-fast-path-off"
+      },
+      "status_after_inject": {
+        "observed": {
+          "TIER_FRAUD_FAST_PATH_PROB": "bronze:0.0,silver:0.2,gold:0.0",
+          "baseline": "bronze:0.0,silver:0.2,gold:0.6"
+        },
+        "state": "armed"
+      },
+      "status_after_clear": {
+        "observed": {
+          "TIER_FRAUD_FAST_PATH_PROB": "bronze:0.0,silver:0.2,gold:0.6",
+          "baseline": "bronze:0.0,silver:0.2,gold:0.6"
+        },
+        "state": "clear"
+      },
+      "started_at": "2026-06-20T12:05:47Z",
+      "ended_at": "2026-06-20T12:28:34Z",
+      "dwell_s": 1200,
+      "samples": [
+        {
+          "at_s": 300,
+          "gateway_5xx_pct": 0.0,
+          "gateway_requests": 34745,
+          "target_errors": 155,
+          "target_traces": 26609,
+          "target_p95_ms": null,
+          "pods_ready": "1/1"
+        },
+        {
+          "at_s": 600,
+          "gateway_5xx_pct": 0.0,
+          "gateway_requests": 31212,
+          "target_errors": 148,
+          "target_traces": 26042,
+          "target_p95_ms": null,
+          "pods_ready": "1/1"
+        },
+        {
+          "at_s": 900,
+          "gateway_5xx_pct": 0.0,
+          "gateway_requests": 32944,
+          "target_errors": 163,
+          "target_traces": 26813,
+          "target_p95_ms": null,
+          "pods_ready": "1/1"
+        },
+        {
+          "at_s": 1200,
+          "gateway_5xx_pct": 0.0,
+          "gateway_requests": 32862,
+          "target_errors": 147,
+          "target_traces": 25635,
+          "target_p95_ms": null,
+          "pods_ready": "1/1"
+        }
+      ],
+      "notes": [],
+      "outcome": "pass"
+    },
+    {
+      "id": "tier-throttle",
+      "name": "Tier throttle",
+      "category": "tier",
+      "severity": "medium",
+      "target_service": "api-gateway",
+      "inject_ok": true,
+      "inject_response": {
+        "action": "inject",
+        "params": {
+          "tier": "gold"
+        },
+        "result": {
+          "after": {
+            "TIER_THROTTLE_LATENCY_MS": "bronze:0,silver:0,gold:1500",
+            "TIER_THROTTLE_PROB": "bronze:0.0,silver:0.0,gold:0.30"
+          },
+          "before": {
+            "TIER_THROTTLE_LATENCY_MS": "bronze:0,silver:0,gold:0",
+            "TIER_THROTTLE_PROB": "bronze:0.0,silver:0.0,gold:0.0"
+          },
+          "deployment": "api-gateway"
+        },
+        "scenario_id": "tier-throttle"
+      },
+      "clear_ok": true,
+      "clear_response": {
+        "action": "clear",
+        "result": {
+          "after": {
+            "TIER_THROTTLE_LATENCY_MS": "bronze:0,silver:0,gold:0",
+            "TIER_THROTTLE_PROB": "bronze:0.0,silver:0.0,gold:0.0"
+          },
+          "before": {
+            "TIER_THROTTLE_LATENCY_MS": "bronze:0,silver:0,gold:1500",
+            "TIER_THROTTLE_PROB": "bronze:0.0,silver:0.0,gold:0.30"
+          },
+          "deployment": "api-gateway"
+        },
+        "scenario_id": "tier-throttle"
+      },
+      "status_after_inject": {
+        "observed": {
+          "TIER_THROTTLE_LATENCY_MS": "bronze:0,silver:0,gold:1500",
+          "TIER_THROTTLE_PROB": "bronze:0.0,silver:0.0,gold:0.30",
+          "baseline_latency_ms": "bronze:0,silver:0,gold:0",
+          "baseline_prob": "bronze:0.0,silver:0.0,gold:0.0"
+        },
+        "state": "armed"
+      },
+      "status_after_clear": {
+        "observed": {
+          "TIER_THROTTLE_LATENCY_MS": "bronze:0,silver:0,gold:0",
+          "TIER_THROTTLE_PROB": "bronze:0.0,silver:0.0,gold:0.0",
+          "baseline_latency_ms": "bronze:0,silver:0,gold:0",
+          "baseline_prob": "bronze:0.0,silver:0.0,gold:0.0"
+        },
+        "state": "clear"
+      },
+      "started_at": "2026-06-20T12:28:34Z",
+      "ended_at": "2026-06-20T12:51:22Z",
+      "dwell_s": 1200,
+      "samples": [
+        {
+          "at_s": 300,
+          "gateway_5xx_pct": 0.0,
+          "gateway_requests": 33915,
+          "target_errors": 322,
+          "target_traces": 33799,
+          "target_p95_ms": null,
+          "pods_ready": "2/2"
+        },
+        {
+          "at_s": 600,
+          "gateway_5xx_pct": 0.0,
+          "gateway_requests": 34357,
+          "target_errors": 301,
+          "target_traces": 34315,
+          "target_p95_ms": null,
+          "pods_ready": "2/2"
+        },
+        {
+          "at_s": 900,
+          "gateway_5xx_pct": 0.0,
+          "gateway_requests": 34768,
+          "target_errors": 340,
+          "target_traces": 34653,
+          "target_p95_ms": null,
+          "pods_ready": "2/2"
+        },
+        {
+          "at_s": 1200,
+          "gateway_5xx_pct": 0.0,
+          "gateway_requests": 35593,
+          "target_errors": 298,
+          "target_traces": 35466,
+          "target_p95_ms": null,
+          "pods_ready": "2/2"
+        }
+      ],
+      "notes": [],
+      "outcome": "pass"
+    },
+    {
+      "id": "cache-cold",
+      "name": "Cache cold (sanctions)",
+      "category": "tier",
+      "severity": "medium",
+      "target_service": "sanctions-aml-service",
+      "inject_ok": true,
+      "inject_response": {
+        "action": "inject",
+        "params": {},
+        "result": {
+          "after": {
+            "CACHE_HIT_RATE": "0.40"
+          },
+          "before": {
+            "CACHE_HIT_RATE": "0.97"
+          },
+          "deployment": "sanctions-aml-service"
+        },
+        "scenario_id": "cache-cold"
+      },
+      "clear_ok": true,
+      "clear_response": {
+        "action": "clear",
+        "result": {
+          "after": {
+            "CACHE_HIT_RATE": "0.97"
+          },
+          "before": {
+            "CACHE_HIT_RATE": "0.40"
+          },
+          "deployment": "sanctions-aml-service"
+        },
+        "scenario_id": "cache-cold"
+      },
+      "status_after_inject": {
+        "observed": {
+          "CACHE_HIT_RATE": "0.40",
+          "baseline": "0.97"
+        },
+        "state": "armed"
+      },
+      "status_after_clear": {
+        "observed": {
+          "CACHE_HIT_RATE": "0.97",
+          "baseline": "0.97"
+        },
+        "state": "clear"
+      },
+      "started_at": "2026-06-20T12:51:22Z",
+      "ended_at": "2026-06-20T13:14:08Z",
+      "dwell_s": 1200,
+      "samples": [
+        {
+          "at_s": 300,
+          "gateway_5xx_pct": 0.0,
+          "gateway_requests": 37168,
+          "target_errors": 120,
+          "target_traces": 17800,
+          "target_p95_ms": null,
+          "pods_ready": "1/1"
+        },
+        {
+          "at_s": 600,
+          "gateway_5xx_pct": 0.0,
+          "gateway_requests": 35749,
+          "target_errors": 109,
+          "target_traces": 17115,
+          "target_p95_ms": null,
+          "pods_ready": "1/1"
+        },
+        {
+          "at_s": 900,
+          "gateway_5xx_pct": 0.0,
+          "gateway_requests": 31256,
+          "target_errors": 103,
+          "target_traces": 16271,
+          "target_p95_ms": null,
+          "pods_ready": "1/1"
+        },
+        {
+          "at_s": 1200,
+          "gateway_5xx_pct": 0.0,
+          "gateway_requests": 32428,
+          "target_errors": 105,
+          "target_traces": 16633,
+          "target_p95_ms": null,
+          "pods_ready": "1/1"
+        }
+      ],
+      "notes": [],
+      "outcome": "pass"
+    },
+    {
+      "id": "sanctions-cache-disabled",
+      "name": "Sanctions cache disabled",
+      "category": "app",
+      "severity": "medium",
+      "target_service": "sanctions-aml-service",
+      "inject_ok": true,
+      "inject_response": {
+        "action": "inject",
+        "params": {},
+        "result": {
+          "after": {
+            "CACHE_ENABLED": "false"
+          },
+          "before": {
+            "CACHE_ENABLED": "true"
+          },
+          "deployment": "sanctions-aml-service"
+        },
+        "scenario_id": "sanctions-cache-disabled"
+      },
+      "clear_ok": true,
+      "clear_response": {
+        "action": "clear",
+        "result": {
+          "after": {
+            "CACHE_ENABLED": "true"
+          },
+          "before": {
+            "CACHE_ENABLED": "false"
+          },
+          "deployment": "sanctions-aml-service"
+        },
+        "scenario_id": "sanctions-cache-disabled"
+      },
+      "status_after_inject": {
+        "observed": {
+          "CACHE_ENABLED": "false",
+          "baseline": "true"
+        },
+        "state": "armed"
+      },
+      "status_after_clear": {
+        "observed": {
+          "CACHE_ENABLED": "true",
+          "baseline": "true"
+        },
+        "state": "clear"
+      },
+      "started_at": "2026-06-20T13:14:08Z",
+      "ended_at": "2026-06-20T13:36:53Z",
+      "dwell_s": 1200,
+      "samples": [
+        {
+          "at_s": 300,
+          "gateway_5xx_pct": 0.0,
+          "gateway_requests": 36566,
+          "target_errors": 133,
+          "target_traces": 7315,
+          "target_p95_ms": null,
+          "pods_ready": "1/1"
+        },
+        {
+          "at_s": 600,
+          "gateway_5xx_pct": 0.0,
+          "gateway_requests": 36462,
+          "target_errors": 109,
+          "target_traces": 7379,
+          "target_p95_ms": null,
+          "pods_ready": "1/1"
+        },
+        {
+          "at_s": 900,
+          "gateway_5xx_pct": 0.0,
+          "gateway_requests": 36617,
+          "target_errors": 102,
+          "target_traces": 7281,
+          "target_p95_ms": null,
+          "pods_ready": "1/1"
+        },
+        {
+          "at_s": 1200,
+          "gateway_5xx_pct": 0.0,
+          "gateway_requests": 36252,
+          "target_errors": 103,
+          "target_traces": 7259,
+          "target_p95_ms": null,
+          "pods_ready": "1/1"
+        }
+      ],
+      "notes": [],
+      "outcome": "pass"
+    },
+    {
+      "id": "bad-deploy-fraud",
+      "name": "Bad deploy: fraud error rate",
+      "category": "app",
+      "severity": "medium",
+      "target_service": "fraud-detection-service",
+      "inject_ok": true,
+      "inject_response": {
+        "action": "inject",
+        "params": {},
+        "result": {
+          "after": {
+            "ERROR_RATE": "0.20"
+          },
+          "before": {
+            "ERROR_RATE": "0.02"
+          },
+          "deployment": "fraud-detection-service"
+        },
+        "scenario_id": "bad-deploy-fraud"
+      },
+      "clear_ok": true,
+      "clear_response": {
+        "action": "clear",
+        "result": {
+          "after": {
+            "ERROR_RATE": "0.02"
+          },
+          "before": {
+            "ERROR_RATE": "0.20"
+          },
+          "deployment": "fraud-detection-service"
+        },
+        "scenario_id": "bad-deploy-fraud"
+      },
+      "status_after_inject": {
+        "observed": {
+          "ERROR_RATE": "0.20",
+          "baseline": "0.02"
+        },
+        "state": "armed"
+      },
+      "status_after_clear": {
+        "observed": {
+          "ERROR_RATE": "0.02",
+          "baseline": "0.02"
+        },
+        "state": "clear"
+      },
+      "started_at": "2026-06-20T13:36:53Z",
+      "ended_at": "2026-06-20T13:59:39Z",
+      "dwell_s": 1200,
+      "samples": [
+        {
+          "at_s": 300,
+          "gateway_5xx_pct": 0.0,
+          "gateway_requests": 30369,
+          "target_errors": 1536,
+          "target_traces": 24926,
+          "target_p95_ms": null,
+          "pods_ready": "1/1"
+        },
+        {
+          "at_s": 600,
+          "gateway_5xx_pct": 0.0,
+          "gateway_requests": 28799,
+          "target_errors": 1548,
+          "target_traces": 24355,
+          "target_p95_ms": null,
+          "pods_ready": "1/1"
+        },
+        {
+          "at_s": 900,
+          "gateway_5xx_pct": 0.0,
+          "gateway_requests": 29122,
+          "target_errors": 1566,
+          "target_traces": 24333,
+          "target_p95_ms": null,
+          "pods_ready": "1/1"
+        },
+        {
+          "at_s": 1200,
+          "gateway_5xx_pct": 0.0,
+          "gateway_requests": 29843,
+          "target_errors": 1529,
+          "target_traces": 24425,
+          "target_p95_ms": null,
+          "pods_ready": "1/1"
+        }
+      ],
+      "notes": [],
+      "outcome": "pass"
+    },
+    {
+      "id": "swift-counterparty-flap",
+      "name": "SWIFT counterparty flap",
+      "category": "app",
+      "severity": "medium",
+      "target_service": "swift-network",
+      "inject_ok": true,
+      "inject_response": {
+        "action": "inject",
+        "params": {},
+        "result": {
+          "after": {
+            "ERROR_RATE": "0.30"
+          },
+          "before": {
+            "ERROR_RATE": "0.05"
+          },
+          "deployment": "swift-network"
+        },
+        "scenario_id": "swift-counterparty-flap"
+      },
+      "clear_ok": true,
+      "clear_response": {
+        "action": "clear",
+        "result": {
+          "after": {
+            "ERROR_RATE": "0.05"
+          },
+          "before": {
+            "ERROR_RATE": "0.30"
+          },
+          "deployment": "swift-network"
+        },
+        "scenario_id": "swift-counterparty-flap"
+      },
+      "status_after_inject": {
+        "observed": {
+          "ERROR_RATE": "0.30",
+          "baseline": "0.05"
+        },
+        "state": "armed"
+      },
+      "status_after_clear": {
+        "observed": {
+          "ERROR_RATE": "0.05",
+          "baseline": "0.05"
+        },
+        "state": "clear"
+      },
+      "started_at": "2026-06-20T13:59:39Z",
+      "ended_at": "2026-06-20T14:22:26Z",
+      "dwell_s": 1200,
+      "samples": [
+        {
+          "at_s": 300,
+          "gateway_5xx_pct": 0.0,
+          "gateway_requests": 35764,
+          "target_errors": 379,
+          "target_traces": 1271,
+          "target_p95_ms": null,
+          "pods_ready": "1/1"
+        },
+        {
+          "at_s": 600,
+          "gateway_5xx_pct": 0.0,
+          "gateway_requests": 35893,
+          "target_errors": 374,
+          "target_traces": 1231,
+          "target_p95_ms": null,
+          "pods_ready": "1/1"
+        },
+        {
+          "at_s": 900,
+          "gateway_5xx_pct": 0.0,
+          "gateway_requests": 35622,
+          "target_errors": 366,
+          "target_traces": 1239,
+          "target_p95_ms": null,
+          "pods_ready": "1/1"
+        },
+        {
+          "at_s": 1200,
+          "gateway_5xx_pct": 0.0,
+          "gateway_requests": 36618,
+          "target_errors": 382,
+          "target_traces": 1298,
+          "target_p95_ms": null,
+          "pods_ready": "1/1"
+        }
+      ],
+      "notes": [],
+      "outcome": "pass"
+    },
+    {
+      "id": "swift-scheme-outage",
+      "name": "SWIFT scheme outage (fraud check)",
+      "category": "app",
+      "severity": "medium",
+      "target_service": "fraud-detection-service",
+      "inject_ok": true,
+      "inject_response": {
+        "action": "inject",
+        "params": {},
+        "result": {
+          "after": {
+            "SCHEME_ERROR_MULTIPLIERS": "SWIFT:5"
+          },
+          "before": {
+            "SCHEME_ERROR_MULTIPLIERS": "SWIFT:3,CHAPS:2"
+          },
+          "deployment": "fraud-detection-service"
+        },
+        "scenario_id": "swift-scheme-outage"
+      },
+      "clear_ok": true,
+      "clear_response": {
+        "action": "clear",
+        "result": {
+          "after": {
+            "SCHEME_ERROR_MULTIPLIERS": "SWIFT:3,CHAPS:2"
+          },
+          "before": {
+            "SCHEME_ERROR_MULTIPLIERS": "SWIFT:5"
+          },
+          "deployment": "fraud-detection-service"
+        },
+        "scenario_id": "swift-scheme-outage"
+      },
+      "status_after_inject": {
+        "observed": {
+          "SCHEME_ERROR_MULTIPLIERS": "SWIFT:5",
+          "baseline": "SWIFT:3,CHAPS:2"
+        },
+        "state": "armed"
+      },
+      "status_after_clear": {
+        "observed": {
+          "SCHEME_ERROR_MULTIPLIERS": "SWIFT:3,CHAPS:2",
+          "baseline": "SWIFT:3,CHAPS:2"
+        },
+        "state": "clear"
+      },
+      "started_at": "2026-06-20T14:22:26Z",
+      "ended_at": "2026-06-20T14:45:14Z",
+      "dwell_s": 1200,
+      "samples": [
+        {
+          "at_s": 300,
+          "gateway_5xx_pct": 0.0,
+          "gateway_requests": 29361,
+          "target_errors": 144,
+          "target_traces": 24775,
+          "target_p95_ms": null,
+          "pods_ready": "1/1"
+        },
+        {
+          "at_s": 600,
+          "gateway_5xx_pct": 0.0,
+          "gateway_requests": 28784,
+          "target_errors": 186,
+          "target_traces": 24418,
+          "target_p95_ms": null,
+          "pods_ready": "1/1"
+        },
+        {
+          "at_s": 900,
+          "gateway_5xx_pct": 0.0,
+          "gateway_requests": 28982,
+          "target_errors": 164,
+          "target_traces": 24562,
+          "target_p95_ms": null,
+          "pods_ready": "1/1"
+        },
+        {
+          "at_s": 1200,
+          "gateway_5xx_pct": 0.0,
+          "gateway_requests": 30574,
+          "target_errors": 166,
+          "target_traces": 25134,
+          "target_p95_ms": null,
+          "pods_ready": "1/1"
+        }
+      ],
+      "notes": [],
+      "outcome": "pass"
+    },
+    {
+      "id": "db-slow",
+      "name": "Ledger DB slow",
+      "category": "latency",
+      "severity": "medium",
+      "target_service": "ledger-service",
+      "inject_ok": true,
+      "inject_response": {
+        "action": "inject",
+        "params": {},
+        "result": {
+          "after": {
+            "DB_LATENCY_MS": "1500"
+          },
+          "before": {
+            "DB_LATENCY_MS": "0"
+          },
+          "deployment": "ledger-service"
+        },
+        "scenario_id": "db-slow"
+      },
+      "clear_ok": true,
+      "clear_response": {
+        "action": "clear",
+        "result": {
+          "after": {
+            "DB_LATENCY_MS": "0"
+          },
+          "before": {
+            "DB_LATENCY_MS": "1500"
+          },
+          "deployment": "ledger-service"
+        },
+        "scenario_id": "db-slow"
+      },
+      "status_after_inject": {
+        "observed": {
+          "DB_LATENCY_MS": "1500",
+          "baseline": "0"
+        },
+        "state": "armed"
+      },
+      "status_after_clear": {
+        "observed": {
+          "DB_LATENCY_MS": "0",
+          "baseline": "0"
+        },
+        "state": "clear"
+      },
+      "started_at": "2026-06-20T14:45:14Z",
+      "ended_at": "2026-06-20T15:08:02Z",
+      "dwell_s": 1200,
+      "samples": [
+        {
+          "at_s": 300,
+          "gateway_5xx_pct": 0.0,
+          "gateway_requests": 28721,
+          "target_errors": 28,
+          "target_traces": 29198,
+          "target_p95_ms": null,
+          "pods_ready": "1/1"
+        },
+        {
+          "at_s": 600,
+          "gateway_5xx_pct": 0.0,
+          "gateway_requests": 33427,
+          "target_errors": 23,
+          "target_traces": 28032,
+          "target_p95_ms": null,
+          "pods_ready": "1/1"
+        },
+        {
+          "at_s": 900,
+          "gateway_5xx_pct": 0.0,
+          "gateway_requests": 34449,
+          "target_errors": 28,
+          "target_traces": 28501,
+          "target_p95_ms": null,
+          "pods_ready": "1/1"
+        },
+        {
+          "at_s": 1200,
+          "gateway_5xx_pct": 0.0,
+          "gateway_requests": 34868,
+          "target_errors": 23,
+          "target_traces": 28427,
+          "target_p95_ms": null,
+          "pods_ready": "1/1"
+        }
+      ],
+      "notes": [],
+      "outcome": "pass"
+    },
+    {
+      "id": "gateway-timeout-squeeze",
+      "name": "Gateway timeout squeeze",
+      "category": "latency",
+      "severity": "high",
+      "target_service": "api-gateway",
+      "inject_ok": true,
+      "inject_response": {
+        "action": "inject",
+        "params": {},
+        "result": {
+          "after": {
+            "DOWNSTREAM_TIMEOUT_S": "0.5"
+          },
+          "before": {
+            "DOWNSTREAM_TIMEOUT_S": "6.0"
+          },
+          "deployment": "api-gateway"
+        },
+        "scenario_id": "gateway-timeout-squeeze"
+      },
+      "clear_ok": true,
+      "clear_response": {
+        "action": "clear",
+        "result": {
+          "after": {
+            "DOWNSTREAM_TIMEOUT_S": "6.0"
+          },
+          "before": {
+            "DOWNSTREAM_TIMEOUT_S": "0.5"
+          },
+          "deployment": "api-gateway"
+        },
+        "scenario_id": "gateway-timeout-squeeze"
+      },
+      "status_after_inject": {
+        "observed": {
+          "DOWNSTREAM_TIMEOUT_S": "0.5",
+          "baseline": "6.0"
+        },
+        "state": "armed"
+      },
+      "status_after_clear": {
+        "observed": {
+          "DOWNSTREAM_TIMEOUT_S": "6.0",
+          "baseline": "6.0"
+        },
+        "state": "clear"
+      },
+      "started_at": "2026-06-20T15:08:02Z",
+      "ended_at": "2026-06-20T15:30:55Z",
+      "dwell_s": 1200,
+      "samples": [
+        {
+          "at_s": 300,
+          "gateway_5xx_pct": 0.0,
+          "gateway_requests": 51252,
+          "target_errors": 12540,
+          "target_traces": 51058,
+          "target_p95_ms": null,
+          "pods_ready": "2/2"
+        },
+        {
+          "at_s": 600,
+          "gateway_5xx_pct": 0.0,
+          "gateway_requests": 51477,
+          "target_errors": 12631,
+          "target_traces": 51559,
+          "target_p95_ms": null,
+          "pods_ready": "2/2"
+        },
+        {
+          "at_s": 900,
+          "gateway_5xx_pct": 0.0,
+          "gateway_requests": 52033,
+          "target_errors": 12809,
+          "target_traces": 51828,
+          "target_p95_ms": null,
+          "pods_ready": "2/2"
+        },
+        {
+          "at_s": 1200,
+          "gateway_5xx_pct": 0.0,
+          "gateway_requests": 52973,
+          "target_errors": 12954,
+          "target_traces": 52785,
+          "target_p95_ms": null,
+          "pods_ready": "2/2"
+        }
+      ],
+      "notes": [],
+      "outcome": "pass"
+    },
+    {
+      "id": "settlement-producer-off",
+      "name": "Settlement producer offline",
+      "category": "app",
+      "severity": "medium",
+      "target_service": "payment-initiation-service",
+      "inject_ok": true,
+      "inject_response": {
+        "action": "inject",
+        "params": {},
+        "result": {
+          "after": {
+            "KAFKA_PRODUCER_ENABLED": "false"
+          },
+          "before": {
+            "KAFKA_PRODUCER_ENABLED": "true"
+          },
+          "deployment": "payment-initiation-service"
+        },
+        "scenario_id": "settlement-producer-off"
+      },
+      "clear_ok": true,
+      "clear_response": {
+        "action": "clear",
+        "result": {
+          "after": {
+            "KAFKA_PRODUCER_ENABLED": "true"
+          },
+          "before": {
+            "KAFKA_PRODUCER_ENABLED": "false"
+          },
+          "deployment": "payment-initiation-service"
+        },
+        "scenario_id": "settlement-producer-off"
+      },
+      "status_after_inject": {
+        "observed": {
+          "KAFKA_PRODUCER_ENABLED": "false",
+          "baseline": "true"
+        },
+        "state": "armed"
+      },
+      "status_after_clear": {
+        "observed": {
+          "KAFKA_PRODUCER_ENABLED": "true",
+          "baseline": "true"
+        },
+        "state": "clear"
+      },
+      "started_at": "2026-06-20T15:30:55Z",
+      "ended_at": "2026-06-20T15:53:45Z",
+      "dwell_s": 1200,
+      "samples": [
+        {
+          "at_s": 300,
+          "gateway_5xx_pct": 0.0,
+          "gateway_requests": 25132,
+          "target_errors": 67,
+          "target_traces": 53158,
+          "target_p95_ms": null,
+          "pods_ready": "3/3"
+        },
+        {
+          "at_s": 600,
+          "gateway_5xx_pct": 0.0,
+          "gateway_requests": 32699,
+          "target_errors": 60,
+          "target_traces": 59306,
+          "target_p95_ms": null,
+          "pods_ready": "3/3"
+        },
+        {
+          "at_s": 900,
+          "gateway_5xx_pct": 0.0,
+          "gateway_requests": 29624,
+          "target_errors": 68,
+          "target_traces": 57028,
+          "target_p95_ms": null,
+          "pods_ready": "3/3"
+        },
+        {
+          "at_s": 1200,
+          "gateway_5xx_pct": 0.0,
+          "gateway_requests": 26958,
+          "target_errors": 78,
+          "target_traces": 54899,
+          "target_p95_ms": null,
+          "pods_ready": "3/3"
+        }
+      ],
+      "notes": [],
+      "outcome": "pass"
+    },
+    {
+      "id": "pod-restart-gateway",
+      "name": "Pod restart (api-gateway)",
+      "category": "infra",
+      "severity": "medium",
+      "target_service": "api-gateway",
+      "inject_ok": true,
+      "inject_response": {
+        "action": "inject",
+        "params": {},
+        "result": {
+          "deleted": "api-gateway-57bcf4cf7d-ks6f6",
+          "match_count": 2,
+          "selector": "app.kubernetes.io/name=api-gateway"
+        },
+        "scenario_id": "pod-restart-gateway"
+      },
+      "clear_ok": true,
+      "clear_response": {
+        "action": "clear",
+        "result": {
+          "transient": true
+        },
+        "scenario_id": "pod-restart-gateway"
+      },
+      "status_after_inject": {
+        "observed": {
+          "note": "transient action; no persistent state"
+        },
+        "state": "clear"
+      },
+      "status_after_clear": {
+        "observed": {
+          "note": "transient action; no persistent state"
+        },
+        "state": "clear"
+      },
+      "started_at": "2026-06-20T15:53:45Z",
+      "ended_at": "2026-06-20T16:16:32Z",
+      "dwell_s": 1200,
+      "samples": [
+        {
+          "at_s": 300,
+          "gateway_5xx_pct": 0.0,
+          "gateway_requests": 35082,
+          "target_errors": 258,
+          "target_traces": 34966,
+          "target_p95_ms": null,
+          "pods_ready": "2/2"
+        },
+        {
+          "at_s": 600,
+          "gateway_5xx_pct": 0.0,
+          "gateway_requests": 34042,
+          "target_errors": 167,
+          "target_traces": 34243,
+          "target_p95_ms": null,
+          "pods_ready": "2/2"
+        },
+        {
+          "at_s": 900,
+          "gateway_5xx_pct": 0.0,
+          "gateway_requests": 32586,
+          "target_errors": 820,
+          "target_traces": 32676,
+          "target_p95_ms": null,
+          "pods_ready": "2/2"
+        },
+        {
+          "at_s": 1200,
+          "gateway_5xx_pct": 0.0,
+          "gateway_requests": 33889,
+          "target_errors": 218,
+          "target_traces": 33786,
+          "target_p95_ms": null,
+          "pods_ready": "2/2"
+        }
+      ],
+      "notes": [],
+      "outcome": "warn"
+    },
+    {
+      "id": "kill-service",
+      "name": "Kill service (scale to 0)",
+      "category": "infra",
+      "severity": "high",
+      "target_service": "(parameterised)",
+      "inject_ok": true,
+      "inject_response": {
+        "action": "inject",
+        "params": {
+          "service": "payment-status-service"
+        },
+        "result": {
+          "after": 0,
+          "before": 1,
+          "deployment": "payment-status-service"
+        },
+        "scenario_id": "kill-service"
+      },
+      "clear_ok": true,
+      "clear_response": {
+        "action": "clear",
+        "result": {
+          "restored": [
+            {
+              "after": 1,
+              "before": 0,
+              "deployment": "payment-status-service"
+            }
+          ]
+        },
+        "scenario_id": "kill-service"
+      },
+      "status_after_inject": {
+        "observed": {
+          "killable": [
+            "api-gateway",
+            "fraud-detection-service",
+            "payment-status-service",
+            "sanctions-aml-service",
+            "swift-network"
+          ],
+          "killed": [
+            "payment-status-service"
+          ]
+        },
+        "state": "armed"
+      },
+      "status_after_clear": {
+        "observed": {
+          "killable": [
+            "api-gateway",
+            "fraud-detection-service",
+            "payment-status-service",
+            "sanctions-aml-service",
+            "swift-network"
+          ],
+          "killed": []
+        },
+        "state": "clear"
+      },
+      "started_at": "2026-06-20T16:16:32Z",
+      "ended_at": "2026-06-20T16:39:11Z",
+      "dwell_s": 1200,
+      "samples": [
+        {
+          "at_s": 300,
+          "gateway_5xx_pct": 0.0,
+          "gateway_requests": 24410,
+          "target_errors": null,
+          "target_traces": null,
+          "target_p95_ms": null,
+          "pods_ready": null
+        },
+        {
+          "at_s": 600,
+          "gateway_5xx_pct": 0.0,
+          "gateway_requests": 25408,
+          "target_errors": null,
+          "target_traces": null,
+          "target_p95_ms": null,
+          "pods_ready": null
+        },
+        {
+          "at_s": 900,
+          "gateway_5xx_pct": 0.0,
+          "gateway_requests": 24178,
+          "target_errors": null,
+          "target_traces": null,
+          "target_p95_ms": null,
+          "pods_ready": null
+        },
+        {
+          "at_s": 1200,
+          "gateway_5xx_pct": 0.0,
+          "gateway_requests": 24891,
+          "target_errors": null,
+          "target_traces": null,
+          "target_p95_ms": null,
+          "pods_ready": null
+        }
+      ],
+      "notes": [],
+      "outcome": "pass"
+    },
+    {
+      "id": "bad-deploy-payment-initiation",
+      "name": "Bad deploy: payment-initiation-service v0.2.0",
+      "category": "deploy",
+      "severity": "high",
+      "target_service": "payment-initiation-service",
+      "inject_ok": true,
+      "inject_response": {
+        "action": "inject",
+        "params": {
+          "version": "0.2.0"
+        },
+        "result": {
+          "bad_version": "0.2.0",
+          "cohort_location": "(all)",
+          "cohort_tier": "gold",
+          "crash_after_s": 240,
+          "deployment": "payment-initiation-service",
+          "env_patch": {
+            "after": {
+              "BAD_DEPLOY_CRASH_AFTER_S": "240",
+              "BAD_DEPLOY_ENABLED": "true",
+              "BAD_DEPLOY_ERROR_RATE": "0.85",
+              "BAD_DEPLOY_FILTER_LOCATION": "",
+              "BAD_DEPLOY_FILTER_TIER": "gold",
+              "BAD_DEPLOY_LATENCY_MS": "4500",
+              "BAD_DEPLOY_RAMP_S": "30",
+              "BAD_DEPLOY_STARTED_AT": "1781973551"
+            },
+            "before": {
+              "BAD_DEPLOY_CRASH_AFTER_S": "0",
+              "BAD_DEPLOY_ENABLED": "false",
+              "BAD_DEPLOY_ERROR_RATE": "0",
+              "BAD_DEPLOY_FILTER_LOCATION": "",
+              "BAD_DEPLOY_FILTER_TIER": "",
+              "BAD_DEPLOY_LATENCY_MS": "0",
+              "BAD_DEPLOY_RAMP_S": "0",
+              "BAD_DEPLOY_STARTED_AT": "0"
+            },
+            "deployment": "payment-initiation-service"
+          },
+          "error_rate": 0.85,
+          "good_version": "0.1.2",
+          "latency_ms": 4500,
+          "otel_resource_attributes_after": "deployment.environment=demo,service.namespace=natwest-payments,service.tier=payment,k8s.cluster.name=natwest-payments-demo,service.version=0.2.0",
+          "otel_resource_attributes_before": "deployment.environment=demo,service.namespace=natwest-payments,service.tier=payment,k8s.cluster.name=natwest-payments-demo,service.version=0.1.2",
+          "ramp_s": 30,
+          "started_at": 1781973551
+        },
+        "scenario_id": "bad-deploy-payment-initiation"
+      },
+      "clear_ok": true,
+      "clear_response": {
+        "action": "clear",
+        "result": {
+          "deployment": "payment-initiation-service",
+          "env_patch": {
+            "after": {
+              "BAD_DEPLOY_CRASH_AFTER_S": "0",
+              "BAD_DEPLOY_ENABLED": "false",
+              "BAD_DEPLOY_ERROR_RATE": "0",
+              "BAD_DEPLOY_FILTER_LOCATION": "",
+              "BAD_DEPLOY_FILTER_TIER": "",
+              "BAD_DEPLOY_LATENCY_MS": "0",
+              "BAD_DEPLOY_RAMP_S": "0",
+              "BAD_DEPLOY_STARTED_AT": "0"
+            },
+            "before": {
+              "BAD_DEPLOY_CRASH_AFTER_S": "240",
+              "BAD_DEPLOY_ENABLED": "true",
+              "BAD_DEPLOY_ERROR_RATE": "0.85",
+              "BAD_DEPLOY_FILTER_LOCATION": "",
+              "BAD_DEPLOY_FILTER_TIER": "gold",
+              "BAD_DEPLOY_LATENCY_MS": "4500",
+              "BAD_DEPLOY_RAMP_S": "30",
+              "BAD_DEPLOY_STARTED_AT": "1781973551"
+            },
+            "deployment": "payment-initiation-service"
+          },
+          "good_version": "0.1.2",
+          "otel_resource_attributes_after": "deployment.environment=demo,service.namespace=natwest-payments,service.tier=payment,k8s.cluster.name=natwest-payments-demo,service.version=0.1.2",
+          "rolled_back_from": "0.2.0"
+        },
+        "scenario_id": "bad-deploy-payment-initiation"
+      },
+      "status_after_inject": {
+        "observed": {
+          "baseline_version": "0.1.2",
+          "cohort_location": "",
+          "cohort_tier": "gold",
+          "crash_after_s": 240,
+          "elapsed_s": 30,
+          "latency_ms": "4500",
+          "phase": "cohort_full",
+          "ramp_s": 30,
+          "service.version": "0.2.0"
+        },
+        "state": "armed"
+      },
+      "status_after_clear": {
+        "observed": {
+          "baseline_version": "0.1.2",
+          "cohort_location": "",
+          "cohort_tier": "",
+          "crash_after_s": 0,
+          "elapsed_s": 0,
+          "latency_ms": "0",
+          "phase": "clear",
+          "ramp_s": 0,
+          "service.version": "0.1.2"
+        },
+        "state": "clear"
+      },
+      "started_at": "2026-06-20T16:39:11Z",
+      "ended_at": "2026-06-20T17:02:00Z",
+      "dwell_s": 1200,
+      "samples": [
+        {
+          "at_s": 300,
+          "gateway_5xx_pct": 0.0,
+          "gateway_requests": 31854,
+          "target_errors": 2429,
+          "target_traces": 64624,
+          "target_p95_ms": null,
+          "pods_ready": "3/3"
+        },
+        {
+          "at_s": 600,
+          "gateway_5xx_pct": 0.0,
+          "gateway_requests": 26907,
+          "target_errors": 6556,
+          "target_traces": 59922,
+          "target_p95_ms": null,
+          "pods_ready": "3/3"
+        },
+        {
+          "at_s": 900,
+          "gateway_5xx_pct": 0.0,
+          "gateway_requests": 26671,
+          "target_errors": 6514,
+          "target_traces": 58964,
+          "target_p95_ms": null,
+          "pods_ready": "3/3"
+        },
+        {
+          "at_s": 1200,
+          "gateway_5xx_pct": 0.0,
+          "gateway_requests": 28166,
+          "target_errors": 6841,
+          "target_traces": 62286,
+          "target_p95_ms": null,
+          "pods_ready": "3/3"
+        }
+      ],
+      "notes": [],
+      "outcome": "pass"
+    },
+    {
+      "id": "redis-outage",
+      "name": "Redis outage",
+      "category": "infra",
+      "severity": "high",
+      "target_service": "redis",
+      "inject_ok": true,
+      "inject_response": {
+        "action": "inject",
+        "params": {},
+        "result": {
+          "after": 0,
+          "before": 1,
+          "deployment": "redis"
+        },
+        "scenario_id": "redis-outage"
+      },
+      "clear_ok": true,
+      "clear_response": {
+        "action": "clear",
+        "result": {
+          "after": 1,
+          "before": 0,
+          "deployment": "redis"
+        },
+        "scenario_id": "redis-outage"
+      },
+      "status_after_inject": {
+        "observed": {
+          "deployment": "redis",
+          "replicas": 0
+        },
+        "state": "armed"
+      },
+      "status_after_clear": {
+        "observed": {
+          "deployment": "redis",
+          "replicas": 1
+        },
+        "state": "clear"
+      },
+      "started_at": "2026-06-20T17:02:01Z",
+      "ended_at": "2026-06-20T17:24:45Z",
+      "dwell_s": 1200,
+      "samples": [
+        {
+          "at_s": 300,
+          "gateway_5xx_pct": 0.0,
+          "gateway_requests": 23997,
+          "target_errors": 0,
+          "target_traces": 0,
+          "target_p95_ms": null,
+          "pods_ready": "/0"
+        },
+        {
+          "at_s": 600,
+          "gateway_5xx_pct": 0.0,
+          "gateway_requests": 25405,
+          "target_errors": 0,
+          "target_traces": 0,
+          "target_p95_ms": null,
+          "pods_ready": "/0"
+        },
+        {
+          "at_s": 900,
+          "gateway_5xx_pct": 0.0,
+          "gateway_requests": 25276,
+          "target_errors": 0,
+          "target_traces": 0,
+          "target_p95_ms": null,
+          "pods_ready": "/0"
+        },
+        {
+          "at_s": 1200,
+          "gateway_5xx_pct": 0.0,
+          "gateway_requests": 23374,
+          "target_errors": 0,
+          "target_traces": 0,
+          "target_p95_ms": null,
+          "pods_ready": "/0"
+        }
+      ],
+      "notes": [],
+      "outcome": "pass"
+    },
+    {
+      "id": "kafka-outage",
+      "name": "Kafka outage",
+      "category": "infra",
+      "severity": "high",
+      "target_service": "kafka",
+      "inject_ok": true,
+      "inject_response": {
+        "action": "inject",
+        "params": {},
+        "result": {
+          "after": 0,
+          "before": 1,
+          "deployment": "kafka"
+        },
+        "scenario_id": "kafka-outage"
+      },
+      "clear_ok": true,
+      "clear_response": {
+        "action": "clear",
+        "result": {
+          "after": 1,
+          "before": 0,
+          "deployment": "kafka"
+        },
+        "scenario_id": "kafka-outage"
+      },
+      "status_after_inject": {
+        "observed": {
+          "deployment": "kafka",
+          "replicas": 0
+        },
+        "state": "armed"
+      },
+      "status_after_clear": {
+        "observed": {
+          "deployment": "kafka",
+          "replicas": 1
+        },
+        "state": "clear"
+      },
+      "started_at": "2026-06-20T17:24:45Z",
+      "ended_at": "2026-06-20T17:47:30Z",
+      "dwell_s": 1200,
+      "samples": [
+        {
+          "at_s": 300,
+          "gateway_5xx_pct": 0.0,
+          "gateway_requests": 29346,
+          "target_errors": 0,
+          "target_traces": 0,
+          "target_p95_ms": null,
+          "pods_ready": "/0"
+        },
+        {
+          "at_s": 600,
+          "gateway_5xx_pct": 0.0,
+          "gateway_requests": 29360,
+          "target_errors": 0,
+          "target_traces": 0,
+          "target_p95_ms": null,
+          "pods_ready": "/0"
+        },
+        {
+          "at_s": 900,
+          "gateway_5xx_pct": 0.0,
+          "gateway_requests": 23816,
+          "target_errors": 0,
+          "target_traces": 0,
+          "target_p95_ms": null,
+          "pods_ready": "/0"
+        },
+        {
+          "at_s": 1200,
+          "gateway_5xx_pct": 0.0,
+          "gateway_requests": 24279,
+          "target_errors": 0,
+          "target_traces": 0,
+          "target_p95_ms": null,
+          "pods_ready": "/0"
+        }
+      ],
+      "notes": [],
+      "outcome": "pass"
+    },
+    {
+      "id": "postgres-outage",
+      "name": "Postgres outage",
+      "category": "infra",
+      "severity": "high",
+      "target_service": "postgres",
+      "inject_ok": true,
+      "inject_response": {
+        "action": "inject",
+        "params": {},
+        "result": {
+          "after": 0,
+          "before": 1,
+          "deployment": "postgres"
+        },
+        "scenario_id": "postgres-outage"
+      },
+      "clear_ok": true,
+      "clear_response": {
+        "action": "clear",
+        "result": {
+          "after": 1,
+          "before": 0,
+          "deployment": "postgres"
+        },
+        "scenario_id": "postgres-outage"
+      },
+      "status_after_inject": {
+        "observed": {
+          "deployment": "postgres",
+          "replicas": 0
+        },
+        "state": "armed"
+      },
+      "status_after_clear": {
+        "observed": {
+          "deployment": "postgres",
+          "replicas": 1
+        },
+        "state": "clear"
+      },
+      "started_at": "2026-06-20T17:47:30Z",
+      "ended_at": "2026-06-20T18:10:18Z",
+      "dwell_s": 1200,
+      "samples": [
+        {
+          "at_s": 300,
+          "gateway_5xx_pct": 0.0,
+          "gateway_requests": 28184,
+          "target_errors": 0,
+          "target_traces": 0,
+          "target_p95_ms": null,
+          "pods_ready": "/0"
+        },
+        {
+          "at_s": 600,
+          "gateway_5xx_pct": 0.0,
+          "gateway_requests": 27070,
+          "target_errors": 0,
+          "target_traces": 0,
+          "target_p95_ms": null,
+          "pods_ready": "/0"
+        },
+        {
+          "at_s": 900,
+          "gateway_5xx_pct": 0.0,
+          "gateway_requests": 27006,
+          "target_errors": 0,
+          "target_traces": 0,
+          "target_p95_ms": null,
+          "pods_ready": "/0"
+        },
+        {
+          "at_s": 1200,
+          "gateway_5xx_pct": 0.0,
+          "gateway_requests": 25472,
+          "target_errors": 0,
+          "target_traces": 0,
+          "target_p95_ms": null,
+          "pods_ready": "/0"
+        }
+      ],
+      "notes": [],
+      "outcome": "pass"
+    }
+  ]
+}

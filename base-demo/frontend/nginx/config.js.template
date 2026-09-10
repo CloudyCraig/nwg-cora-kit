@@ -1,0 +1,42 @@
+// Generated at container start from /etc/web-frontend/config.js.template
+// by docker-entrypoint.sh. Values come from environment variables, which
+// are sourced from the chart-managed Secret + ConfigMap.
+//
+// Note on auth.passwordSha256: this is the SHA-256 hex of the demo password.
+// The plaintext password is set at deploy time via Helm --set and is hashed
+// in the chart template before reaching the container; the plaintext is
+// never written to source control or to /config.js.
+window.__APP_CONFIG__ = {
+  rumRealm: "${RUM_REALM}",
+  rumAccessToken: "${RUM_ACCESS_TOKEN}",
+  applicationName: "${APP_NAME}",
+  deploymentEnvironment: "${DEPLOYMENT_ENVIRONMENT}",
+  gatewayUrl: "${GATEWAY_URL}",
+  // Presenter token used by the Chaos Dashboard at /ops (gated by
+  // ?ops=1). The SPA puts this on every /chaos/api/* request as the
+  // X-Chaos-Token header. Sourced from the chart-managed
+  // `chaos-controller-token` Secret at deploy time; never committed.
+  // Empty when the chaos-controller is disabled - the Ops page will
+  // surface "401 from chaos-controller" and degrade gracefully.
+  chaosToken: "${CHAOS_PRESENTER_TOKEN}",
+  // Cross-launch targets for the top-nav. Each link silently
+  // disappears when its URL is the empty string, so a tenant can
+  // ship either, both, or neither without code changes.
+  //   * observabilityUrl: usually https://app.<realm>.signalfx.com/
+  //   * itsiUrl:          usually https://<splunk-fqdn>:8000/en-US/app/itsi
+  //   * thousandEyesUrl:  usually https://app.thousandeyes.com/, optionally
+  //                       scoped with ?aid=<account-group-id> + a #/views/
+  //                       hash to land directly on the demo dashboard.
+  // Values flow from helm/.../values.yaml -> frontend.observabilityUrl /
+  // frontend.itsiUrl / frontend.thousandEyesUrl, exported as env vars by
+  // helm/.../templates/web-frontend.yaml, and finally substituted here
+  // at container boot.
+  observabilityUrl: "${OBSERVABILITY_URL}",
+  itsiUrl: "${ITSI_URL}",
+  thousandEyesUrl: "${THOUSANDEYES_URL}",
+  auth: {
+    enabled: ${AUTH_ENABLED},
+    username: "${AUTH_USERNAME}",
+    passwordSha256: "${AUTH_PASSWORD_SHA256}"
+  }
+};

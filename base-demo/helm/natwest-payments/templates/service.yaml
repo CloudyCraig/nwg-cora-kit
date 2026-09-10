@@ -1,0 +1,29 @@
+{{- $root := . -}}
+{{- $defaults := .Values.defaults -}}
+{{- range $name, $svc := .Values.services }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  namespace: {{ $root.Values.namespace }}
+  labels:
+    {{- include "natwest.labels" (dict "name" $name "release" $root.Release.Name "tier" ($svc.tier | default "unknown")) | nindent 4 }}
+spec:
+  # Per-service overrides allow flipping a single Service to NodePort so it
+  # can be reached from outside the cluster without the org SCP-blocked
+  # ELB path. Used by api-gateway when the Splunk EC2 nginx reverse proxy
+  # is fronting the SPA - see scripts/05b-frontend-public-proxy.sh.
+  type: {{ $svc.serviceType | default "ClusterIP" }}
+  selector:
+    app.kubernetes.io/name: {{ $name }}
+    app.kubernetes.io/instance: {{ $root.Release.Name }}
+  ports:
+    - name: http
+      port: {{ $defaults.port }}
+      targetPort: http
+      protocol: TCP
+      {{- if and (eq ($svc.serviceType | default "ClusterIP") "NodePort") $svc.nodePort }}
+      nodePort: {{ $svc.nodePort }}
+      {{- end }}
+{{- end }}

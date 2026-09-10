@@ -1,0 +1,3027 @@
+# NatWest Card Payments - ITSI service tree manifest.
+#
+# Source of truth for: services, dependencies, KPIs, KPI base searches,
+# entity types, and entities. Consumed by scripts/07-itsi-bootstrap.sh which
+# renders this into
+# ITSI's REST API (idempotent upsert via deterministic _key fields).
+#
+# Tree shape (mirrors the platform call graph - Channels -> API Gateway
+# entry, which fans out to Payment Services, Experience Services,
+# Business Services and Ledger & Settlement Services):
+#   L1 NatWest Card Payments
+#     L3 API Gateway
+#       L2 Payment Services           (init/validate/route/fee/status)
+#       L2 Experience Services        (user/profile/limits/notification)
+#       L2 Business Services          (account/beneficiary/sanctions/fraud)
+#       L2 Ledger & Settlement        (ledger/settle/recon/report + PG/Kafka)
+#       L2 Payment Networks         (FPS/BACS/CHAPS/SWIFT/SEPA/Cheque)
+#         ^ linked from Payment, Experience, Business and Ledger & Settlement
+#     L2 Digital Customer Experience  (ThousandEyes synthetics)
+#     L2 Customer Tier Experience (merged Bronze/Silver/Gold; was 3 tiles)
+#     L3 individual microservices
+#     L4 Postgres / Redis / Kafka
+
+# DEMO TUNING: when demo_steady_state_green is true, scripts/lib/itsi_bootstrap.py
+# clears inline KPI thresholds so L1/L2/L4 tiles stay normal under steady-state
+# traffic. Services may opt selective KPIs back in via demo_threshold_kpi_titles
+# (e.g. tier-throttle, gold-fast-path-off, madrid-network-degradation). Re-run
+# scripts/07-itsi-bootstrap.sh after edits.
+demo_steady_state_green: true
+
+metadata:
+  security_group: default_itsi_security_group
+  default_severity_aggregation: weighted_avg
+  # Index conventions assumed by the KPI base searches below:
+  #   index=otel_traces sourcetype="otel:traces" -> spans (collector splunk_hec exporter for traces).
+  #                                                Spans are isolated from `main` so Splunk
+  #                                                Observability Log Observer Connect doesn't
+  #                                                surface every span as an "unknown log type".
+  #   index=main sourcetype="otel:logs"    -> service stdout JSON logs (already wired).
+  #   index=splunkrum                       -> RUM events (Log Observer Connect from o11y).
+  #   index=_internal sourcetype=splunkd    -> Splunk Enterprise self-monitoring.
+  # The bootstrap script logs a warning if any of the above returns 0 events at
+  # the time of the run; KPIs still get created and will populate once data
+  # flows.
+  spans_index_search: 'index=otel_traces sourcetype="otel:traces"'
+  logs_index_search:  'index=main sourcetype="otel:logs"'
+  rum_index_search:   'index=splunkrum'
+  # Splunk Observability Cloud realm for entity-type navigation drilldowns
+  # (Synthetic Business Outcomes → Synthetics test summary). Overridden at
+  # bootstrap time by TF_VAR_splunk_realm when set.
+  splunk_o11y_realm: eu0
+
+# ---------------------------------------------------------------------------
+# Entity types (ITSI classification + drilldown placeholders).
+# ---------------------------------------------------------------------------
+entity_types:
+  - _key: nwpay_et_thousandeyes
+    title: ThousandEyes
+    # Required for navigation_link dashboard_drilldowns to appear in Service
+    # Analyzer → KPI → Entities → Drilldowns (see itsi_entity.py:
+    # show_navigation_in_service_analyzer).
+    show_navigation_in_service_analyzer: true
+    description: >
+      Drilldown class for the six ThousandEyes synthetic tests under Digital
+      Customer Experience. data_drilldowns let an operator who is looking at
+      one TE entity in Service Analyzer click straight through to the matching
+      `index=thousandeyes` events for that test (filtered by
+      `thousandeyes.test.name`, matched via the entity identifier
+      `te_test_name`). dashboard_drilldowns deep-link to the live ThousandEyes
+      web app for the matching test, using the per-entity te_test_id field for
+      `${te_test_id}` token substitution in the URL.
+    data_drilldowns:
+      - title: ThousandEyes path-vis events
+        type: events
+        static_filter:
+          type: include
+          field: sourcetype
+          values:
+            - "cisco:thousandeyes:path-vis"
+        entity_field_filter:
+          type: entity
+          data_field: thousandeyes.test.name
+          entity_field: te_test_name
+      - title: ThousandEyes web-transaction traces
+        type: events
+        static_filter:
+          type: include
+          field: sourcetype
+          values:
+            - "cisco:thousandeyes:trace"
+        entity_field_filter:
+          type: entity
+          data_field: thousandeyes.test.name
+          entity_field: te_test_name
+    dashboard_drilldowns:
+      # Deep-link to the specific test in the ThousandEyes web app
+      # (https://app.thousandeyes.com/test_settings/?testId=<id>). The
+      # ${te_test_id} token is substituted at click time from the entity's
+      # informational.te_test_id field.
+      - id: te_test_settings
+        title: ThousandEyes — test settings
+        dashboard_type: navigation_link
+        base_url: "https://app.thousandeyes.com/test_settings/?testId=${te_test_id}"
+        params:
+          static_params: {}
+          alias_param_map: []
+      # Deep-link to the live test view (path-vis / web-transactions) in
+      # the ThousandEyes web app for the matching test.
+      - id: te_views
+        title: ThousandEyes — live views
+        dashboard_type: navigation_link
+        base_url: "https://app.thousandeyes.com/#/views/tests/${te_test_id}"
+        params:
+          static_params: {}
+          alias_param_map: []
+    # vital_metrics drives the per-tile chart on the ITSI Entity Insights page
+    # (/app/itsi/entity_overview?groupBy=type). Each entity is keyed by the
+    # ThousandEyes test name (`te_test_name` identifier) so vital-metric
+    # joins align with the DCE KPI entity-breakdown field.
+    vital_metrics:
+      - metric_name: Availability
+        unit: "%"
+        is_key: 1
+        matching_entity_fields:
+          - te_test_name
+        split_by_fields:
+          - te_test_name
+        search: |-
+          search index=thousandeyes sourcetype="cisco:thousandeyes:path-vis"
+          | rename "metric_name:http.server.request.availability" AS http_avail
+          | rename "metric_name:web.page_load.completion"          AS page_completion
+          | rename "metric_name:dns.lookup.availability"           AS dns_avail
+          | rename "metric_name:web.transaction.completion"        AS tx_completion
+          | rename "thousandeyes.test.name"                        AS te_test_name
+          | eval val = coalesce(http_avail, page_completion, dns_avail, tx_completion*100)
+          | where isnotnull(val) AND isnotnull(te_test_name)
+          | bin _time span=5m
+          | stats avg(val) AS val by _time, te_test_name
+      - metric_name: Response time
+        unit: ms
+        is_key: 0
+        matching_entity_fields:
+          - te_test_name
+        split_by_fields:
+          - te_test_name
+        search: |-
+          search index=thousandeyes sourcetype="cisco:thousandeyes:path-vis"
+          | rename "metric_name:http.client.request.duration" AS http_dur_s
+          | rename "metric_name:web.page_load.duration"       AS page_load_s
+          | rename "thousandeyes.test.name"                   AS te_test_name
+          | eval val = coalesce(http_dur_s * 1000, page_load_s * 1000)
+          | where isnotnull(val) AND isnotnull(te_test_name)
+          | bin _time span=5m
+          | stats avg(val) AS val by _time, te_test_name
+
+  - _key: nwpay_et_splunk_synthetics
+    title: Splunk Observability Synthetics
+    show_navigation_in_service_analyzer: true
+    description: >
+      Drilldown class for Synthetic Business Outcomes KPI entities. KPI signal
+      still comes from ThousandEyes events in Splunk Enterprise; navigation
+      drilldowns deep-link to the matching Splunk Observability Synthetics
+      test in O11y Cloud using the per-entity syn_test_id field.
+    dashboard_drilldowns:
+      - id: syn_test_summary
+        title: Splunk Synthetics — test summary
+        dashboard_type: navigation_link
+        base_url: "https://app.__SPLUNK_REALM__.signalfx.com/#/synthetics/tests/${syn_test_id}"
+        params:
+          static_params: {}
+          alias_param_map: []
+      - id: syn_test_overview
+        title: Splunk Synthetics — all tests
+        dashboard_type: navigation_link
+        base_url: "https://app.__SPLUNK_REALM__.signalfx.com/#/synthetics"
+        params:
+          static_params: {}
+          alias_param_map: []
+
+  - _key: nwpay_et_postgres_database
+    title: Postgres database
+    description: >
+      Drilldown class for in-cluster Postgres databases scraped by
+      postgres_exporter. data_drilldowns scope ITSI metrics index rows to
+      the entity identifier `pg_database` (maps to the `datname` dimension
+      on pg_stat_database_* metrics).
+    data_drilldowns:
+      - title: Postgres database metrics
+        type: metrics
+        static_filter:
+          type: include
+          field: metric_name
+          values:
+            - "pg_stat_database_*"
+            - "pg_database_size_bytes"
+            - "pg_long_running_transactions"
+        entity_field_filter:
+          type: entity
+          data_field: datname
+          entity_field: pg_database
+
+  - _key: nwpay_et_kafka_broker
+    title: Kafka broker
+    description: >
+      Drilldown class for in-cluster Kafka brokers scraped via the JMX
+      exporter sidecar. Entity identifier `kafka_instance` maps to the
+      `service.instance.id` dimension on kafka_* metrics in
+      index=itsi_im_metrics.
+    data_drilldowns:
+      - title: Kafka broker metrics
+        type: metrics
+        static_filter:
+          type: include
+          field: metric_name
+          values:
+            - "kafka.*"
+            - "kafka_server_*"
+            - "kafka_network_*"
+            - "kafka_controller_*"
+        entity_field_filter:
+          type: entity
+          data_field: service.instance.id
+          entity_field: kafka_instance
+
+# ---------------------------------------------------------------------------
+# KPI base searches.
+#
+# Each KPI base search is a parameterised SPL that produces one or more
+# numeric metrics. Service KPIs reference a base search by `id` and pick a
+# metric from it by `metric_id`, optionally adding entity-scoped filters.
+# ---------------------------------------------------------------------------
+kpi_base_searches:
+
+  - id: kbs_apm_latency
+    title: APM span p99 latency by service
+    description: |
+      p99 span duration per minute, grouped by OTel service.name. Drives every
+      "p99 latency" KPI in the tree. Source: spans forwarded to HEC by the
+      OTel collector's splunk_hec traces exporter.
+
+      The exporter currently lands events with sourcetype=httpevent (HEC
+      default) rather than the documented sourcetype=otel:traces, so we
+      accept both. Span duration is computed as end_time - start_time
+      (nanoseconds) when the legacy `duration_ns` field isn't present.
+      Span attributes are nested under `attributes.*` in the httpevent
+      payload; we lift `customer.tier` out for tier-aware filters.
+    base_search: |
+      index=otel_traces sourcetype="otel:traces" service.name=*
+      | rename "service.name" as service_name
+      | rename "attributes.customer.tier" as customer_tier
+      | eval duration_ns = coalesce(duration_ns, end_time - start_time)
+      | bin _time span=1m
+      | stats perc99(duration_ns) as p99_ns by _time, service_name, customer_tier
+      | eval p99_ms = round(p99_ns / 1000000, 0)
+    entity_alias_filtering_fields: service_name
+    metrics:
+      - id: p99_ms
+        title: p99 latency
+        unit: ms
+        threshold_field: p99_ms
+        aggregate_statop: max
+        entity_statop:    max
+        gap_severity:     unknown
+
+  - id: kbs_apm_error_rate
+    title: APM span error rate by service
+    description: |
+      Per-minute error ratio (errors / total spans), grouped by service.name
+      and customer.tier so tier KPIs can specialise the same base search.
+      An "error" is any span whose OTel status.code is STATUS_CODE_ERROR
+      (set by the SDK on uncaught exceptions / 5xx responses) or whose
+      legacy `error` boolean was set on the resource attributes.
+    base_search: |
+      index=otel_traces sourcetype="otel:traces" service.name=*
+      | rename "service.name" as service_name
+      | rename "attributes.customer.tier" as customer_tier
+      | rename "status.code" as status_code
+      | bin _time span=1m
+      | stats count(eval(status_code="STATUS_CODE_ERROR" OR 'error'="true")) as errors,
+              count                                                          as total
+              by _time, service_name, customer_tier
+      | eval error_rate = round(errors / total, 4)
+    entity_alias_filtering_fields: service_name
+    metrics:
+      - id: error_rate
+        title: error rate
+        unit: ratio
+        threshold_field: error_rate
+        aggregate_statop: avg
+        entity_statop:    avg
+        gap_severity:     unknown
+
+  - id: kbs_apm_request_rate
+    title: APM span request rate by service
+    description: |
+      Per-minute SERVER-span count, divided by 60 to give RPS. Server
+      spans = inbound HTTP/grpc handlers, so this counts external calls
+      hitting each service. Filters on both the legacy `span_kind`
+      (otel:traces format) and the current `kind` field (httpevent
+      format) emitted by the splunk_hec exporter.
+    base_search: |
+      index=otel_traces sourcetype="otel:traces"
+        service.name=* (kind="SPAN_KIND_SERVER" OR span_kind="SPAN_KIND_SERVER")
+      | rename "service.name" as service_name
+      | rename "attributes.customer.tier" as customer_tier
+      | bin _time span=1m
+      | stats count as rpm by _time, service_name, customer_tier
+      | eval rps = round(rpm / 60.0, 2)
+    entity_alias_filtering_fields: service_name
+    metrics:
+      - id: rps
+        title: requests per second
+        unit: rps
+        threshold_field: rps
+        aggregate_statop: sum
+        entity_statop:    sum
+        gap_severity:     unknown
+
+  - id: kbs_apm_throttle_rate
+    title: Throttle rate at api-gateway by tier
+    description: |
+      Fraction of api-gateway spans where payment.throttled=true. Drives
+      the "throttle rate" KPI on the API Gateway tier and the per-tier
+      decline KPIs. Reads from both `payment.throttled` (otel:traces
+      format) and `attributes.payment.throttled` (httpevent format).
+    base_search: |
+      index=otel_traces sourcetype="otel:traces" service.name=api-gateway
+      | rename "attributes.customer.tier" as customer_tier
+      | rename "attributes.payment.throttled" as attr_throttled
+      | bin _time span=1m
+      | stats count(eval(attr_throttled="true" OR 'payment.throttled'="true")) as throttled,
+              count                                                              as total
+              by _time, customer_tier
+      | eval throttle_rate = round(throttled / total, 4)
+    entity_alias_filtering_fields: customer_tier
+    metrics:
+      - id: throttle_rate
+        title: throttle rate
+        unit: ratio
+        threshold_field: throttle_rate
+        aggregate_statop: avg
+        entity_statop:    avg
+        gap_severity:     unknown
+
+  - id: kbs_payments_by_location
+    title: Payments by customer location (p95 latency, RPS, error rate)
+    description: |
+      Per-minute APM aggregates split by customer.location (the city the
+      payment originated from). Drives the L2 "Payments by Location"
+      service so a regional latency story (e.g. Madrid client-side RTT
+      degradation) shows up as one bad city rather than a global p95
+      lift.
+
+      Source is the api-gateway server span - that's where the SDK has
+      finished extracting the customer.location attribute from the
+      JSON body, so every row has a populated city. Spans without a
+      location (e.g. internal health checks) are dropped by the
+      `customer_location!=""` filter so they don't poison the bucket
+      with empty-string rows.
+
+      The same KBS also surfaces the roaming-payment p95 (filter
+      `payment.roaming=true`) so the fraud-detection story has a
+      single, stable KPI it can pivot on.
+    base_search: |
+      index=otel_traces sourcetype="otel:traces" service.name=api-gateway
+        (kind="SPAN_KIND_SERVER" OR span_kind="SPAN_KIND_SERVER")
+      | rename "attributes.customer.location" as customer_location
+      | rename "attributes.customer.country"  as customer_country
+      | rename "attributes.customer.region"   as customer_region
+      | rename "attributes.payment.roaming"   as payment_roaming
+      | rename "status.code"                  as status_code
+      | where isnotnull(customer_location) AND customer_location!=""
+      | eval duration_ns = coalesce(duration_ns, end_time - start_time)
+      | bin _time span=1m
+      | stats perc95(duration_ns) as p95_ns,
+              perc99(duration_ns) as p99_ns,
+              count               as rpm,
+              count(eval(status_code="STATUS_CODE_ERROR" OR 'error'="true")) as errors
+              by _time, customer_location, customer_country, customer_region, payment_roaming
+      | eval p95_ms     = round(p95_ns / 1000000, 0),
+             p99_ms     = round(p99_ns / 1000000, 0),
+             rps        = round(rpm / 60.0, 2),
+             error_rate = round(errors / rpm, 4)
+    entity_alias_filtering_fields: customer_location
+    metrics:
+      - id: p95_ms
+        title: p95 latency by location
+        unit: ms
+        threshold_field: p95_ms
+        aggregate_statop: max
+        entity_statop:    max
+        gap_severity:     unknown
+      - id: p99_ms
+        title: p99 latency by location
+        unit: ms
+        threshold_field: p99_ms
+        aggregate_statop: max
+        entity_statop:    max
+        gap_severity:     unknown
+      - id: rps
+        title: requests per second by location
+        unit: rps
+        threshold_field: rps
+        aggregate_statop: sum
+        entity_statop:    sum
+        gap_severity:     unknown
+      - id: error_rate
+        title: error rate by location
+        unit: ratio
+        threshold_field: error_rate
+        aggregate_statop: avg
+        entity_statop:    avg
+        gap_severity:     unknown
+
+  - id: kbs_madrid_p95_chaos_gated
+    title: Madrid p95 latency (chaos-gated)
+    description: |
+      Madrid-only p95 at the api-gateway. Reports the real latency only
+      while `madrid-network-degradation` chaos is injected; otherwise
+      emits 0 so the ITSI KPI stays green at steady state even when the
+      global span p95 is elevated.
+    base_search: |
+      index=otel_traces sourcetype="otel:traces" service.name=api-gateway
+        (kind="SPAN_KIND_SERVER" OR span_kind="SPAN_KIND_SERVER")
+      | rename "attributes.customer.location" as customer_location
+      | where customer_location="madrid"
+      | eval duration_ns = coalesce(duration_ns, end_time - start_time)
+      | bin _time span=1m
+      | stats perc95(duration_ns) as p95_ns by _time
+      | eval actual_p95_ms = round(p95_ns / 1000000, 0)
+      | appendcols [
+          search index=nwpay_audit sourcetype="nwpay:chaos" scenario="madrid-network-degradation" earliest=-7d
+          | sort - _time
+          | head 1
+          | eval chaos_active=if(action="inject", 1, 0)
+          | fields chaos_active
+        ]
+      | eval chaos_active=coalesce(chaos_active, 0)
+      | eval p95_ms = if(chaos_active=1, actual_p95_ms, 0)
+      | fields _time, p95_ms
+    metrics:
+      - id: p95_ms
+        title: Madrid p95 latency
+        unit: ms
+        threshold_field: p95_ms
+        aggregate_statop: max
+        entity_statop:    max
+        gap_severity:     unknown
+
+  - id: kbs_tier_bronze_decline_chaos_gated
+    title: Bronze decline rate (chaos-gated)
+    description: |
+      Bronze-tier gateway error rate, surfaced only while a tier-throttle or
+      bad-deploy chaos scenario is actively injected. Steady state reports 0
+      so Customer Tier Experience stays green when no chaos is running.
+    base_search: |
+      index=otel_traces sourcetype="otel:traces" service.name=api-gateway
+      | rename "attributes.customer.tier" as customer_tier
+      | where customer_tier="bronze"
+      | rename "status.code" as status_code
+      | bin _time span=1m
+      | stats count(eval(status_code="STATUS_CODE_ERROR" OR 'error'="true")) as errors,
+              count as total by _time
+      | eval actual_error_rate = if(total > 0, round(errors / total, 4), 0)
+      | appendcols [
+          search index=nwpay_audit sourcetype="nwpay:chaos"
+            (scenario="tier-throttle" OR scenario="bad-deploy-payment-initiation" OR scenario="bad-deploy-fraud")
+            earliest=-7d
+          | sort - _time | head 1
+          | eval chaos_active=if(action="inject", 1, 0)
+          | fields chaos_active
+        ]
+      | eval chaos_active=coalesce(chaos_active, 0)
+      | eval error_rate = if(chaos_active=1, actual_error_rate, 0)
+      | fields _time, error_rate
+    metrics:
+      - id: error_rate
+        title: bronze decline rate
+        unit: ratio
+        threshold_field: error_rate
+        aggregate_statop: avg
+        entity_statop:    avg
+        gap_severity:     unknown
+
+  - id: kbs_tier_gold_p95_chaos_gated
+    title: Gold p95 latency (chaos-gated)
+    description: |
+      Gold-tier payment-initiation p99 latency, surfaced only while
+      gold-fast-path-off or a bad-deploy chaos scenario is actively injected.
+    base_search: |
+      index=otel_traces sourcetype="otel:traces" service.name=payment-initiation-service
+      | rename "attributes.customer.tier" as customer_tier
+      | where customer_tier="gold"
+      | eval duration_ns = coalesce(duration_ns, end_time - start_time)
+      | bin _time span=1m
+      | stats perc99(duration_ns) as p99_ns by _time
+      | eval actual_p99_ms = round(p99_ns / 1000000, 0)
+      | appendcols [
+          search index=nwpay_audit sourcetype="nwpay:chaos"
+            (scenario="gold-fast-path-off" OR scenario="bad-deploy-payment-initiation" OR scenario="bad-deploy-fraud")
+            earliest=-7d
+          | sort - _time | head 1
+          | eval chaos_active=if(action="inject", 1, 0)
+          | fields chaos_active
+        ]
+      | eval chaos_active=coalesce(chaos_active, 0)
+      | eval p99_ms = if(chaos_active=1, actual_p99_ms, 0)
+      | fields _time, p99_ms
+    metrics:
+      - id: p99_ms
+        title: gold p99 latency
+        unit: ms
+        threshold_field: p99_ms
+        aggregate_statop: max
+        entity_statop:    max
+        gap_severity:     unknown
+
+  - id: kbs_cache_miss_rate
+    title: Sanctions cache miss rate
+    description: |
+      Mirrors the existing Splunk Observability detector at
+      terraform/observability.tf:99-120. Warns at 10% miss rate.
+      Reads cache attributes from both the otel:traces top-level
+      (cache.namespace / cache.hit) and the httpevent nested form
+      (attributes.cache.namespace / attributes.cache.hit).
+    base_search: |
+      index=otel_traces sourcetype="otel:traces" service.name=sanctions-aml-service
+      | rename "attributes.cache.namespace" as attr_cache_ns
+      | rename "attributes.cache.hit" as attr_cache_hit
+      | where attr_cache_ns="sanctions" OR 'cache.namespace'="sanctions"
+      | bin _time span=1m
+      | stats count(eval(attr_cache_hit="false" OR 'cache.hit'="false")) as misses,
+              count                                                       as total
+              by _time
+      | eval miss_rate = round(misses / total, 4)
+    metrics:
+      - id: miss_rate
+        title: cache miss rate
+        unit: ratio
+        threshold_field: miss_rate
+        aggregate_statop: avg
+        entity_statop:    avg
+        gap_severity:     unknown
+
+  - id: kbs_rum_page_load
+    title: RUM page load p95 (server-side proxy)
+    description: |
+      Historical context (2026-06-11): the original implementation queried
+      `index=splunkrum event="page_view"` and assumed Log Observer Connect
+      was federating Splunk RUM page-view events from Splunk Observability
+      Cloud into a local `splunkrum` index on Splunk Enterprise. LOC was
+      never wired up in this demo, so the index doesn't exist and the KPI
+      sat at zero for every operator. The Customer Channel tile read "no
+      data" even during a live demo where the SPA was actually under load.
+
+      Current implementation: api-gateway server-side p95 latency for the
+      first XHR each SPA session makes (POST /process, which the user
+      triggers on Send Payment). This is a server-side proxy for the
+      user-perceived "the page is slow" signal:
+
+        * When db-slow chaos hits, the gateway's call into ledger-service
+          blocks, gateway p95 climbs, and the SPA's submit button visibly
+          spins. The KPI moves.
+        * When fraud-burst or latency-storm chaos hits, the gateway path
+          stretches, p95 climbs, the SPA's "waiting" overlay extends. The
+          KPI moves.
+        * When kafka-outage hits, settlement returns 5xx and the gateway
+          response time briefly spikes before failure mode kicks in. The
+          KPI moves.
+
+      Caveats (presenter notes):
+        * Does NOT capture the SPA's static-asset load (index.html, JS
+          bundle, CSS) - that's served by nginx + the web-frontend pod,
+          neither of which exports OTel spans for static GETs. The true
+          first-contentful-paint signal only lives in Splunk Observability
+          RUM (web vitals: rum.lcp.app.natwest-payments-web). To upgrade
+          this KPI to the real RUM metric, configure the Splunk App for
+          Splunk Observability Cloud (already installed at
+          /opt/splunk/etc/apps/splunk_app_for_splunk_o11y_cloud) with a
+          user-level API token (TF_VAR_splunk_api_token), then change the
+          base search to:
+            | rest /servicesNS/-/splunk_app_for_splunk_o11y_cloud/o11y-metrictimeseries
+                  program="data('rum.lcp.app.natwest-payments-web').percentile(95).publish()"
+                  start_time="-2m" end_time="now"
+            | spath value | rename value AS p95_ms
+        * The XHR p95 is a per-request signal, not a per-page-load signal.
+          One slow XHR per page = one sample; the "page load p95" name is
+          retained for ITSI/glass-table compatibility but the metric is
+          better thought of as "first-XHR p95".
+
+      Splits the value by customer_tier so the Bronze / Silver / Gold
+      service tiles light up independently (matches the per-tier story
+      the synthetic-outcomes panel tells).
+    base_search: |
+      index=otel_traces service.name=api-gateway name="POST /process"
+      | rename "attributes.customer.tier" as customer_tier
+      | eval duration_ms = (end_time - start_time) / 1000000
+      | eval customer_tier = coalesce(customer_tier, "unknown")
+      | bin _time span=1m
+      | stats perc95(duration_ms) as p95_ms by _time, customer_tier
+    entity_alias_filtering_fields: customer_tier
+    metrics:
+      - id: p95_ms
+        title: page load p95
+        unit: ms
+        threshold_field: p95_ms
+        aggregate_statop: max
+        entity_statop:    max
+        gap_severity:     unknown
+
+  - id: kbs_synthetic_success
+    title: Synthetic check success rate
+    description: |
+      Historical context (2026-06-11): the original implementation queried
+      `index=splunkrum event="synthetic_run"` and assumed Splunk Synthetics
+      checks landed in a local `splunkrum` index via Log Observer Connect.
+      LOC was never wired up so the KPI read zero. The Customer Channel
+      tile showed "no data" even when our six ThousandEyes tests were
+      successfully probing the public SPA + API gateway URLs.
+
+      Current implementation: rolls up the http.server.request.availability
+      signal from ThousandEyes tests TE-01 (login page availability) and
+      TE-02 (API gateway availability), both of which already feed
+      index=thousandeyes via the Cisco ThousandEyes Add-on for Splunk's
+      Streaming integration (see scripts/09-configure-splunk-te-inputs.sh).
+
+      Why TE instead of Splunk Synthetics:
+        * TE is already provisioned and configured for this demo
+          (scripts/08-configure-thousandeyes.sh creates the six tests).
+        * TE-01 + TE-02 directly probe the public demo URLs from five
+          geographies, which is closer to a real customer's "is the bank
+          up?" perspective than an internal Splunk Synthetic check would
+          be.
+        * Splunk Synthetics costs device-minutes; reusing TE costs
+          nothing extra for this demo.
+
+      Failure semantics: success_rate = avg(http.server.request.availability) / 100,
+      where each TE probe returns 100 when its HTTP response matched the
+      configured status code AND content regex, else 0. We average across
+      both tests + all agents per minute so a single-agent flake doesn't
+      open a notable.
+
+      Caveat: TE-01 + TE-02 run every minute by default, which gives the
+      KPI ~5 samples per 5-minute window. If TE's streaming integration
+      stalls (we saw this for 40 days when the `enabled` flag on the
+      stream flipped to false in 2026-05), success_rate goes to N/A
+      rather than 0 because the bin produces no rows. The TE freshness
+      preflight check in scripts/00-preflight.sh catches that decay.
+    base_search: |
+      index=thousandeyes sourcetype="cisco:thousandeyes:path-vis"
+      | rename "metric_name:http.server.request.availability" AS http_avail
+      | rename "thousandeyes.test.name" AS test_name
+      | where (test_name="NatWest Payments - SPA login page"
+             OR test_name="NatWest Payments - API gateway recent"
+             OR test_name="NatWest Payments - POST /api/process"
+             OR test_name="NatWest Payments - SPA login page-load")
+            AND isnotnull(http_avail)
+      | bin _time span=5m
+      | stats avg(http_avail) AS avg_avail by _time
+      | eval success_rate = round(avg_avail / 100, 3)
+    metrics:
+      - id: success_rate
+        title: synthetic success rate
+        unit: ratio
+        threshold_field: success_rate
+        aggregate_statop: avg
+        entity_statop:    avg
+        gap_severity:     unknown
+
+  - id: kbs_kafka_lag
+    title: Kafka consumer lag for payments.settled
+    description: |
+      Pulls Kafka consumer-group lag from settlement-service spans (the
+      OTel collector emits messaging.kafka.consumer.lag on consumer
+      `process` spans when kafkaConsumerEnabled=true). Reads both the
+      legacy top-level fields (messaging.system / messaging.operation /
+      messaging.kafka.consumer.lag) and their httpevent-flattened
+      attributes.* equivalents.
+    base_search: |
+      index=otel_traces sourcetype="otel:traces" service.name=settlement-service
+      | rename "attributes.messaging.system" as attr_msg_system
+      | rename "attributes.messaging.operation" as attr_msg_op
+      | rename "attributes.messaging.kafka.consumer.lag" as attr_msg_lag
+      | where (attr_msg_system="kafka" OR 'messaging.system'="kafka")
+            AND (attr_msg_op="process" OR 'messaging.operation'="process")
+      | eval lag_value = coalesce(attr_msg_lag, 'messaging.kafka.consumer.lag')
+      | bin _time span=1m
+      | stats max(lag_value) as lag by _time
+    metrics:
+      - id: lag
+        title: consumer lag
+        unit: messages
+        threshold_field: lag
+        aggregate_statop: max
+        entity_statop:    max
+        gap_severity:     unknown
+
+  # -----------------------------------------------------------------------
+  # Redis health KPIs (sourced from collector/values.yaml redis receiver +
+  # prometheus/infra job for redis_exporter). Three numeric metrics:
+  #   * evictions_per_min - sustained churn signal
+  #   * memory_used_bytes - absolute memory footprint
+  #   * connected_clients - reachability and pool health
+  # -----------------------------------------------------------------------
+  - id: kbs_redis_health
+    title: Redis health (evictions, memory, clients)
+    description: |
+      Three Redis health signals stitched together from the OTel native
+      redis receiver and the redis_exporter prometheus scrape. Drives the
+      L4 nwpay_l4_redis service KPIs and feeds into the L3 microservices
+      that depend on it (sanctions-aml-service, fraud-detection-service).
+
+      itsi_im_metrics is a metric-type index, so the read path uses
+      `| mstats` (event-style `index=…` against a metric store returns
+      zero rows). The query pivots a single mstats aggregation over the
+      union of metric names by metric_name, so either the SignalFx-schema
+      native receiver names (redis.*) or the prometheus exporter names
+      (redis_*) populate the same output columns.
+    base_search: |
+      | mstats max(_value) AS v
+          WHERE index=itsi_im_metrics
+                metric_name IN (
+                  "redis.keys.evicted",
+                  "redis.memory.used",
+                  "redis.clients.connected",
+                  "redis_evicted_keys_total",
+                  "redis_memory_used_bytes",
+                  "redis_connected_clients"
+                )
+          BY metric_name span=1m
+      | eval evicted_total     = case(metric_name IN ("redis.keys.evicted","redis_evicted_keys_total"), v),
+             memory_used_bytes = case(metric_name IN ("redis.memory.used","redis_memory_used_bytes"), v),
+             connected_clients = case(metric_name IN ("redis.clients.connected","redis_connected_clients"), v)
+      | stats max(evicted_total)     AS evicted_total,
+              max(memory_used_bytes) AS memory_used_bytes,
+              max(connected_clients) AS connected_clients
+              BY _time
+      | streamstats current=t window=2 range(evicted_total) AS evictions_per_min
+      | eval evictions_per_min = coalesce(evictions_per_min, 0)
+    metrics:
+      - id: evictions_per_min
+        title: evictions / min
+        unit: count
+        threshold_field: evictions_per_min
+        aggregate_statop: max
+        entity_statop:    max
+        gap_severity:     unknown
+      - id: memory_used_bytes
+        title: memory used
+        unit: bytes
+        threshold_field: memory_used_bytes
+        aggregate_statop: max
+        entity_statop:    max
+        gap_severity:     unknown
+      - id: connected_clients
+        title: connected clients
+        unit: count
+        threshold_field: connected_clients
+        aggregate_statop: avg
+        entity_statop:    avg
+        gap_severity:     unknown
+
+  # -----------------------------------------------------------------------
+  # Postgres health KPIs (native postgresql receiver + postgres_exporter).
+  # Eight numeric metrics covering saturation, cache, errors, throughput,
+  # capacity, and stuck-connection signals:
+  #   * backends            - active connections (saturation signal)
+  #   * cache_hit_ratio     - shared_buffers effectiveness
+  #   * deadlocks_per_min   - DML pathology indicator
+  #   * rollbacks_per_min   - app-side error rate (txn aborts)
+  #   * temp_bytes_per_min  - spills to disk (bad query plans / db-slow chaos)
+  #   * commits_per_sec     - successful txn throughput (informational)
+  #   * db_size_bytes       - capacity tracking (informational)
+  #   * long_running_txns   - stuck-transaction / leak detection
+  #
+  # long_running_txns is sourced from pg_long_running_transactions, a
+  # gauge populated by the `long_running_transactions` collector
+  # (enabled via --collector.long_running_transactions on the
+  # postgres_exporter sidecar in
+  # helm/natwest-payments/templates/postgres.yaml). The exporter only
+  # counts transactions older than 60s, which is the right cutoff for
+  # a payments app where every /process call should complete in <1s;
+  # anything still alive at the 60s mark is genuinely stuck (zombie
+  # connection, deadlock victim, manual psql session left open). The
+  # native postgresqlreceiver has no equivalent metric.
+  # -----------------------------------------------------------------------
+  - id: kbs_postgres_health
+    title: Postgres health (backends, cache, deadlocks, rollbacks, temp, commits, db_size, idle-in-tx)
+    description: |
+      Eight Postgres health signals. Drives the L4 nwpay_l4_postgres KPIs
+      that ledger-service depends on. Cache hit ratio is computed from
+      pg_stat_database blocks_hit / blocks_read counters. commit/rollback
+      and temp_bytes counters are converted into per-period rates via
+      `streamstats range()` because the source is a monotonic counter.
+
+      itsi_im_metrics is a metric-type index; the read path uses
+      `| mstats`. Cumulative counters (commits, rollbacks, deadlocks,
+      temp_bytes) use `latest(_value)` per 1m bucket — `sum(_value)`
+      double-counts scrapes and breaks `streamstats range()`. Gauges
+      (backends, db_size, blocks_*) use the same latest aggregation.
+
+      pg_long_running_transactions has no `datname` dimension, so it is
+      fetched in a subsearch (without BY datname) and joined onto the
+      per-database rows as ledger-only signal.
+
+      Entity breakdown splits on the postgres_exporter `datname` dimension
+      (ledger + postgres). Instance-level gauges such as
+      pg_long_running_transactions are attributed to the application
+      database (ledger).
+    base_search: |
+      | mstats latest(_value) AS v
+          WHERE index=itsi_im_metrics
+                metric_name IN (
+                  "pg_stat_database_numbackends",
+                  "pg_stat_database_deadlocks",
+                  "pg_stat_database_blks_hit",
+                  "pg_stat_database_blks_read",
+                  "pg_stat_database_xact_commit",
+                  "pg_stat_database_xact_rollback",
+                  "pg_stat_database_temp_bytes",
+                  "pg_database_size_bytes"
+                )
+          BY metric_name datname span=1m
+      | eval pg_database = if(isnotnull(datname) AND datname!="", datname, null())
+      | where isnotnull(pg_database) AND pg_database IN ("ledger","postgres")
+      | eval backends           = case(metric_name="pg_stat_database_numbackends",  v),
+             deadlocks_total    = case(metric_name="pg_stat_database_deadlocks",   v),
+             blocks_hit         = case(metric_name="pg_stat_database_blks_hit",     v),
+             blocks_read        = case(metric_name="pg_stat_database_blks_read",    v),
+             commits_total      = case(metric_name="pg_stat_database_xact_commit",   v),
+             rollbacks_total    = case(metric_name="pg_stat_database_xact_rollback", v),
+             temp_bytes_total   = case(metric_name="pg_stat_database_temp_bytes",   v),
+             db_size_bytes      = case(metric_name="pg_database_size_bytes",         v)
+      | stats max(backends)          AS backends,
+              max(deadlocks_total)   AS deadlocks_total,
+              max(blocks_hit)        AS blocks_hit,
+              max(blocks_read)       AS blocks_read,
+              max(commits_total)     AS commits_total,
+              max(rollbacks_total)   AS rollbacks_total,
+              max(temp_bytes_total)  AS temp_bytes_total,
+              max(db_size_bytes)     AS db_size_bytes
+              BY _time, pg_database
+      | join type=left _time pg_database [
+          | mstats latest(_value) AS long_running_txns
+              WHERE index=itsi_im_metrics
+                    metric_name="pg_long_running_transactions"
+              span=1m
+          | eval pg_database="ledger"
+        ]
+      | streamstats current=t window=2
+              range(deadlocks_total)  AS deadlocks_per_min,
+              range(commits_total)    AS commits_total_per_min,
+              range(rollbacks_total)  AS rollbacks_per_min,
+              range(temp_bytes_total) AS temp_bytes_per_min
+              by pg_database
+      | eval deadlocks_per_min  = coalesce(deadlocks_per_min, 0),
+             rollbacks_per_min  = coalesce(rollbacks_per_min, 0),
+             temp_bytes_per_min = coalesce(temp_bytes_per_min, 0),
+             commits_per_sec    = round(coalesce(commits_total_per_min, 0) / 60, 3),
+             long_running_txns  = coalesce(long_running_txns, 0),
+             cache_hit_ratio    = round(blocks_hit / (blocks_hit + blocks_read + 1), 4)
+    entity_alias_filtering_fields: pg_database
+    entity_breakdown: true
+    metrics:
+      - id: backends
+        title: active backends
+        unit: count
+        threshold_field: backends
+        aggregate_statop: max
+        entity_statop:    max
+        gap_severity:     unknown
+      - id: cache_hit_ratio
+        title: cache hit ratio
+        unit: ratio
+        threshold_field: cache_hit_ratio
+        aggregate_statop: avg
+        entity_statop:    avg
+        gap_severity:     unknown
+      - id: deadlocks_per_min
+        title: deadlocks / min
+        unit: count
+        threshold_field: deadlocks_per_min
+        aggregate_statop: max
+        entity_statop:    max
+        gap_severity:     unknown
+      - id: rollbacks_per_min
+        title: txn rollbacks / min
+        unit: count
+        threshold_field: rollbacks_per_min
+        aggregate_statop: max
+        entity_statop:    max
+        gap_severity:     unknown
+      - id: temp_bytes_per_min
+        title: temp file bytes / min
+        unit: bytes
+        threshold_field: temp_bytes_per_min
+        aggregate_statop: max
+        entity_statop:    max
+        gap_severity:     unknown
+      - id: commits_per_sec
+        title: txn commits / sec
+        unit: rate
+        threshold_field: commits_per_sec
+        aggregate_statop: avg
+        entity_statop:    avg
+        gap_severity:     unknown
+      - id: db_size_bytes
+        title: database size
+        unit: bytes
+        threshold_field: db_size_bytes
+        aggregate_statop: max
+        entity_statop:    max
+        gap_severity:     unknown
+      - id: long_running_txns
+        title: long-running txns (>60s)
+        unit: count
+        threshold_field: long_running_txns
+        aggregate_statop: max
+        entity_statop:    max
+        gap_severity:     unknown
+
+  # -----------------------------------------------------------------------
+  # Ledger JDBC pool (chaos-gated). Surfaces HikariCP saturation only while
+  # db-slow or payment-meltdown act-1 is injected; steady state reports 0 so
+  # nwpay_l4_postgres stays green. Pool max is 16 (application.yml).
+  # -----------------------------------------------------------------------
+  - id: kbs_ledger_jdbc_pool_chaos_gated
+    title: Ledger JDBC pool (chaos-gated)
+    description: |
+      HikariCP pool signals from ledger-service OTel metrics
+      (db.client.connections.*). Steady state reports 0; real values surface
+      only while db-slow or payment-meltdown act-1 is injected so the Postgres
+      L4 node flips red during Act 1 without false positives at baseline.
+    base_search: |
+      | mstats max(_value) AS v
+          WHERE index=itsi_im_metrics
+                metric_name IN (
+                  "db.client.connections.usage",
+                  "db.client.connections.pending_requests",
+                  "db.client.connections.timeouts"
+                )
+                service.name="ledger-service"
+          BY metric_name state span=1m
+      | eval actual_pool_used = case(
+            metric_name="db.client.connections.usage" AND state="used", v),
+             actual_pool_pending = case(
+            metric_name="db.client.connections.pending_requests", v),
+             actual_pool_timeouts_total = case(
+            metric_name="db.client.connections.timeouts", v)
+      | stats max(actual_pool_used) AS actual_pool_used,
+              max(actual_pool_pending) AS actual_pool_pending,
+              max(actual_pool_timeouts_total) AS actual_pool_timeouts_total
+              BY _time
+      | streamstats current=t window=2
+              range(actual_pool_timeouts_total) AS pool_timeouts_per_min
+      | eval pool_timeouts_per_min = coalesce(pool_timeouts_per_min, 0)
+      | appendcols [
+          search index=nwpay_audit sourcetype="nwpay:chaos"
+            (scenario="db-slow" OR scenario="payment-meltdown")
+            earliest=-7d
+          | sort - _time
+          | head 1
+          | eval chaos_active=if(action="inject", 1, 0)
+          | fields chaos_active
+        ]
+      | eval chaos_active=coalesce(chaos_active, 0),
+             pool_used = if(chaos_active=1, actual_pool_used, 0),
+             pool_pending = if(chaos_active=1, actual_pool_pending, 0),
+             pool_timeouts_per_min = if(chaos_active=1, pool_timeouts_per_min, 0)
+      | fields _time, pool_used, pool_pending, pool_timeouts_per_min
+    metrics:
+      - id: pool_used
+        title: JDBC pool in use
+        unit: count
+        threshold_field: pool_used
+        aggregate_statop: max
+        entity_statop:    max
+        gap_severity:     unknown
+      - id: pool_pending
+        title: JDBC pool pending
+        unit: count
+        threshold_field: pool_pending
+        aggregate_statop: max
+        entity_statop:    max
+        gap_severity:     unknown
+      - id: pool_timeouts_per_min
+        title: JDBC connection timeouts / min
+        unit: count
+        threshold_field: pool_timeouts_per_min
+        aggregate_statop: max
+        entity_statop:    max
+        gap_severity:     unknown
+
+  # -----------------------------------------------------------------------
+  # Postgres backends online (chaos-gated). Reports real pg_stat_database
+  # numbackends only during postgres-outage / payment-meltdown; steady state
+  # reports 10 (above critical_low) so the KPI stays green until Act 2.
+  # -----------------------------------------------------------------------
+  - id: kbs_postgres_backends_chaos_gated
+    title: Postgres backends online (chaos-gated)
+    description: |
+      Active backends on the ledger database. Steady state reports 10;
+      real backend count surfaces only while postgres-outage or
+      payment-meltdown is injected so backends=0 trips critical during Act 2.
+    base_search: |
+      | mstats latest(_value) AS actual_backends
+          WHERE index=itsi_im_metrics
+                metric_name="pg_stat_database_numbackends"
+                datname="ledger"
+          span=1m
+      | appendcols [
+          search index=nwpay_audit sourcetype="nwpay:chaos"
+            (scenario="postgres-outage" OR scenario="payment-meltdown")
+            earliest=-7d
+          | sort - _time
+          | head 1
+          | eval chaos_active=if(action="inject", 1, 0)
+          | fields chaos_active
+        ]
+      | eval chaos_active=coalesce(chaos_active, 0),
+             backends = if(chaos_active=1, actual_backends, 10)
+      | fields _time, backends
+    entity_alias_filtering_fields: pg_database
+    entity_breakdown: true
+    metrics:
+      - id: backends
+        title: backends online
+        unit: count
+        threshold_field: backends
+        aggregate_statop: max
+        entity_statop:    max
+        gap_severity:     unknown
+
+  # -----------------------------------------------------------------------
+  # Kafka health KPIs (native kafkametrics receiver + jmx_exporter).
+  # Eight numeric metrics covering broker liveness, replication, latency,
+  # throughput, and controller / partition pathology:
+  #   * brokers_online           - counts of active brokers (= 1 in demo)
+  #   * under_replicated         - non-zero indicates broker / disk issue
+  #   * request_p99_ms           - produce request latency 99p
+  #   * messages_in_per_sec      - producer-side throughput (payments.settled)
+  #   * bytes_in_per_sec         - broker ingress bandwidth (capacity)
+  #   * offline_partitions       - should ALWAYS be 0 (broker death / disk full)
+  #   * active_controller_count  - should ALWAYS be exactly 1 (split-brain)
+  #   * isr_shrinks_per_min      - replica churn (flapping followers)
+  #
+  # messages-in and bytes-in are pulled from kafka_server_brokertopicmetrics_*_oneminuterate
+  # (a JMX exporter gauge that already gives us a per-sec value) rather
+  # than from the *_count counter, so no streamstats range() is required.
+  # isr_shrinks_per_min IS derived from the cumulative *_count counter via
+  # streamstats range() because the 1m gauge equivalent is too lossy.
+  # -----------------------------------------------------------------------
+  - id: kbs_kafka_health
+    title: Kafka health (brokers, replication, latency, throughput, controller)
+    description: |
+      Eight Kafka health signals. Drives the L4 nwpay_l4_kafka KPIs (in
+      addition to the existing consumer-lag KPI). Latency comes from the
+      JMX exporter's RequestMetrics MBean.
+
+      itsi_im_metrics is a metric-type index; the read path uses
+      `| mstats`. We compute avg+max+sum in a single mstats call and
+      pivot on metric_name so either the native kafkametrics receiver
+      names (kafka.*) or the JMX exporter names
+      (kafka_server_replicamanager_*, kafka_network_requestmetrics_*,
+      kafka_server_brokertopicmetrics_*, kafka_controller_*) populate
+      the same output columns.
+
+      Entity breakdown splits on the JMX scrape target
+      (`service.instance.id`, e.g. kafka.natwest.svc.cluster.local:5556).
+      The demo cluster runs a single combined controller+broker node.
+    base_search: |
+      | mstats avg(_value) AS v_avg, max(_value) AS v_max, sum(_value) AS v_sum
+          WHERE index=itsi_im_metrics
+                metric_name IN (
+                  "kafka.brokers",
+                  "kafka.partition.under_replicated",
+                  "kafka_server_replicamanager_underreplicatedpartitions",
+                  "kafka_network_requestmetrics_totaltimems_99thpercentile",
+                  "kafka_server_brokertopicmetrics_messagesinpersec_oneminuterate",
+                  "kafka_server_brokertopicmetrics_bytesinpersec_oneminuterate",
+                  "kafka_controller_offlinepartitionscount",
+                  "kafka_controller_activecontrollercount",
+                  "kafka_server_replicamanager_isrshrinkspersec_count"
+                )
+          BY metric_name service.instance.id span=1m
+      | eval kafka_instance = coalesce(nullif(service.instance.id, ""),
+                                     "kafka.natwest.svc.cluster.local:5556")
+      | eval brokers_online           = case(metric_name="kafka.brokers", v_avg),
+             under_replicated         = case(metric_name IN ("kafka.partition.under_replicated","kafka_server_replicamanager_underreplicatedpartitions"), v_max),
+             request_p99_ms           = case(metric_name="kafka_network_requestmetrics_totaltimems_99thpercentile", v_max),
+             messages_in_per_sec      = case(metric_name="kafka_server_brokertopicmetrics_messagesinpersec_oneminuterate", v_sum),
+             bytes_in_per_sec         = case(metric_name="kafka_server_brokertopicmetrics_bytesinpersec_oneminuterate", v_sum),
+             offline_partitions       = case(metric_name="kafka_controller_offlinepartitionscount", v_max),
+             active_controller_count  = case(metric_name="kafka_controller_activecontrollercount", v_max),
+             isr_shrinks_total        = case(metric_name="kafka_server_replicamanager_isrshrinkspersec_count", v_max)
+      | stats avg(brokers_online)          AS brokers_online,
+              max(under_replicated)        AS under_replicated,
+              max(request_p99_ms)          AS request_p99_ms,
+              max(messages_in_per_sec)     AS messages_in_per_sec,
+              max(bytes_in_per_sec)        AS bytes_in_per_sec,
+              max(offline_partitions)      AS offline_partitions,
+              max(active_controller_count) AS active_controller_count,
+              max(isr_shrinks_total)       AS isr_shrinks_total
+              BY _time, kafka_instance
+      | streamstats current=t window=2 range(isr_shrinks_total) AS isr_shrinks_per_min
+              by kafka_instance
+      | eval brokers_online          = coalesce(brokers_online, 0),
+             under_replicated        = coalesce(under_replicated, 0),
+             request_p99_ms          = coalesce(request_p99_ms, 0),
+             messages_in_per_sec     = coalesce(messages_in_per_sec, 0),
+             bytes_in_per_sec        = coalesce(bytes_in_per_sec, 0),
+             offline_partitions      = coalesce(offline_partitions, 0),
+             active_controller_count = coalesce(active_controller_count, 0),
+             isr_shrinks_per_min     = coalesce(isr_shrinks_per_min, 0)
+    entity_alias_filtering_fields: kafka_instance
+    entity_breakdown: true
+    metrics:
+      - id: brokers_online
+        title: brokers online
+        unit: count
+        threshold_field: brokers_online
+        aggregate_statop: min
+        entity_statop:    min
+        gap_severity:     unknown
+      - id: messages_in_per_sec
+        title: messages-in / sec
+        unit: rate
+        threshold_field: messages_in_per_sec
+        aggregate_statop: avg
+        entity_statop:    avg
+        gap_severity:     unknown
+      - id: bytes_in_per_sec
+        title: bytes-in / sec
+        unit: bytes
+        threshold_field: bytes_in_per_sec
+        aggregate_statop: avg
+        entity_statop:    avg
+        gap_severity:     unknown
+      - id: offline_partitions
+        title: offline partitions
+        unit: count
+        threshold_field: offline_partitions
+        aggregate_statop: max
+        entity_statop:    max
+        gap_severity:     unknown
+      - id: active_controller_count
+        title: active controllers
+        unit: count
+        threshold_field: active_controller_count
+        aggregate_statop: max
+        entity_statop:    max
+        gap_severity:     unknown
+      - id: isr_shrinks_per_min
+        title: ISR shrinks / min
+        unit: count
+        threshold_field: isr_shrinks_per_min
+        aggregate_statop: max
+        entity_statop:    max
+        gap_severity:     unknown
+      - id: under_replicated
+        title: under-replicated partitions
+        unit: count
+        threshold_field: under_replicated
+        aggregate_statop: max
+        entity_statop:    max
+        gap_severity:     unknown
+      - id: request_p99_ms
+        title: request p99 latency
+        unit: ms
+        threshold_field: request_p99_ms
+        aggregate_statop: max
+        entity_statop:    max
+        gap_severity:     unknown
+
+  # ---------------------------------------------------------------------
+  # ThousandEyes synthetic KPI base searches.
+  #
+  # Source: ThousandEyes Cloud "splunk-hec" Stream Integrations (v7
+  # OpenTelemetry API). Provisioned by:
+  #   scripts/08-configure-thousandeyes.sh    - creates the 6 demo tests
+  #   scripts/09-configure-splunk-te-inputs.sh - HEC tokens + index
+  #   scripts/09b-create-te-streams.sh         - splunk-hec stream
+  #                                              integrations (metric +
+  #                                              trace data models)
+  #
+  # OpenTelemetry semantic-conventions field model (NOT the legacy
+  # ta_cisco_thousandeyes CIM mapping):
+  #
+  #   sourcetype=cisco:thousandeyes:path-vis  - one Splunk event per
+  #     OTel metric data point. The metric value lives in an *indexed*
+  #     field whose name is "metric_name:<otel.metric.name>". Use
+  #     `rename "metric_name:<x>" AS <y>` to lift it out of the colon
+  #     namespace before stats. Identity fields use dot syntax:
+  #       thousandeyes.test.{name,id,type}
+  #       thousandeyes.source.agent.{name,id,location}
+  #     Metrics observed: http.client.request.duration (s),
+  #       http.server.request.availability (0-100 %),
+  #       web.page_load.duration (s), web.page_load.completion (0-100 %),
+  #       web.transaction.completion (0/1), web.transaction.errors.count,
+  #       dns.lookup.availability (0-100 %), network.{loss,latency,jitter}.
+  #
+  #   sourcetype=cisco:thousandeyes:trace - one Splunk event per OTel
+  #     span. start_time/end_time are nanoseconds since epoch; span
+  #     duration_ms = (end_time - start_time) / 1e6. Trace-level
+  #     identity is duplicated as both `test_{name,id,type}` (no
+  #     prefix) AND `thousandeyes.test.{name,id,type}` so we coalesce.
+  #
+  # Test types in the OTel data are SINGULAR ("web-transaction",
+  # "dns-server", "http-server", "page-load", "agent-to-server"). The
+  # legacy v6 CIM add-on used plurals ("web-transactions"); the v7
+  # OpenTelemetry stream emits the OTel canonical singular form.
+  # ---------------------------------------------------------------------
+
+  # NOTE on architecture: ITSI's "shared indicator" search collapses the
+  # base_search results into ONE row via a global aggregate (e.g.
+  # `| stats min(availability_pct)`) BEFORE the per-KPI filter from the
+  # L2 service KPI definition can run. That means a single base_search
+  # serving multiple per-test KPIs would always return the global
+  # min/max across all six tests (so e.g. SPA availability would read 0
+  # whenever the unrelated DNS test was failing). To keep each TE KPI
+  # bound to a single test, we author one base_search per test+metric
+  # below and bake the test_name filter directly into the SPL. Each
+  # base_search therefore returns at most one row per minute with one
+  # numeric value, which the indicator search aggregates cleanly.
+
+  - id: kbs_te_spa_avail
+    title: TE SPA login page availability
+    description: |
+      ThousandEyes HTTP-server test (TE-01) probing the public SPA login
+      page. http.server.request.availability % per minute, averaged
+      across cloud agents. 100 = all probes received a successful HTTP
+      response within the test timeout.
+    base_search: |
+      index=thousandeyes sourcetype="cisco:thousandeyes:path-vis"
+      | rename "metric_name:http.server.request.availability" AS http_avail
+      | rename "thousandeyes.test.name"                       AS test_name
+      | rename "thousandeyes.test.id"                         AS test_id
+      | where test_name="NatWest Payments - SPA login page" AND isnotnull(http_avail)
+      | bin _time span=1m
+      | stats avg(http_avail) AS availability_pct
+              by _time, test_name, test_id
+      | rename test_name AS te_test_name
+    entity_alias_filtering_fields: te_test_name
+    entity_breakdown: true
+    metrics:
+      - id: availability_pct
+        title: availability
+        unit: percent
+        threshold_field: availability_pct
+        aggregate_statop: min
+        entity_statop:    min
+        gap_severity:     unknown
+
+  - id: kbs_te_api_gateway_avail
+    title: TE API gateway availability
+    description: |
+      ThousandEyes HTTP-server test (TE-02) hitting GET /api/v1/payments/
+      recent. http.server.request.availability % per minute across
+      cloud agents.
+    base_search: |
+      index=thousandeyes sourcetype="cisco:thousandeyes:path-vis"
+      | rename "metric_name:http.server.request.availability" AS http_avail
+      | rename "thousandeyes.test.name"                       AS test_name
+      | rename "thousandeyes.test.id"                         AS test_id
+      | where test_name="NatWest Payments - API gateway recent" AND isnotnull(http_avail)
+      | bin _time span=1m
+      | stats avg(http_avail) AS availability_pct
+              by _time, test_name, test_id
+      | rename test_name AS te_test_name
+    entity_alias_filtering_fields: te_test_name
+    entity_breakdown: true
+    metrics:
+      - id: availability_pct
+        title: availability
+        unit: percent
+        threshold_field: availability_pct
+        aggregate_statop: min
+        entity_statop:    min
+        gap_severity:     unknown
+
+  - id: kbs_te_spa_response_time
+    title: TE SPA login page response time
+    description: |
+      ThousandEyes HTTP-server test (TE-01) - average HTTP response time
+      for the SPA login page. http.client.request.duration converted
+      from OTel seconds to milliseconds.
+    base_search: |
+      index=thousandeyes sourcetype="cisco:thousandeyes:path-vis"
+      | rename "metric_name:http.client.request.duration" AS http_dur_s
+      | rename "thousandeyes.test.name"                   AS test_name
+      | rename "thousandeyes.test.id"                     AS test_id
+      | where test_name="NatWest Payments - SPA login page" AND isnotnull(http_dur_s)
+      | eval response_time_ms = http_dur_s * 1000
+      | bin _time span=1m
+      | stats avg(response_time_ms) AS response_time_ms
+              by _time, test_name, test_id
+      | rename test_name AS te_test_name
+    entity_alias_filtering_fields: te_test_name
+    entity_breakdown: true
+    metrics:
+      - id: response_time_ms
+        title: HTTP response time
+        unit: ms
+        threshold_field: response_time_ms
+        aggregate_statop: max
+        entity_statop:    max
+        gap_severity:     unknown
+
+  - id: kbs_te_spa_page_load
+    title: TE SPA page-load time
+    description: |
+      ThousandEyes page-load test (TE-03) - browser-driven full page
+      load. web.page_load.duration converted from OTel seconds to
+      milliseconds. Reflects user-perceived first-screen timing.
+    base_search: |
+      index=thousandeyes sourcetype="cisco:thousandeyes:path-vis"
+      | rename "metric_name:web.page_load.duration" AS page_load_s
+      | rename "thousandeyes.test.name"             AS test_name
+      | rename "thousandeyes.test.id"               AS test_id
+      | where test_name="NatWest Payments - SPA login page-load" AND isnotnull(page_load_s)
+      | eval page_load_ms = page_load_s * 1000
+      | bin _time span=1m
+      | stats avg(page_load_ms) AS page_load_ms
+              by _time, test_name, test_id
+      | rename test_name AS te_test_name
+    entity_alias_filtering_fields: te_test_name
+    entity_breakdown: true
+    metrics:
+      - id: page_load_ms
+        title: page-load time
+        unit: ms
+        threshold_field: page_load_ms
+        aggregate_statop: max
+        entity_statop:    max
+        gap_severity:     unknown
+
+  - id: kbs_te_journey_success
+    title: TE end-to-end transaction success rate
+    description: |
+      ThousandEyes web-transactions test (TE-04) - full payment journey
+      Selenium round outcome. web.transaction.completion (0=fail,
+      1=success) averaged per minute => 0.0-1.0 success ratio.
+    base_search: |
+      index=thousandeyes sourcetype="cisco:thousandeyes:path-vis"
+      | rename "metric_name:web.transaction.completion" AS tx_completion
+      | rename "thousandeyes.test.name"                 AS test_name
+      | rename "thousandeyes.test.id"                   AS test_id
+      | where test_name="NatWest Payments - end-to-end payment journey" AND isnotnull(tx_completion)
+      | bin _time span=1m
+      | stats avg(tx_completion) AS success_rate
+              by _time, test_name, test_id
+      | rename test_name AS te_test_name
+    entity_alias_filtering_fields: te_test_name
+    entity_breakdown: true
+    metrics:
+      - id: success_rate
+        title: transaction success rate
+        unit: ratio
+        threshold_field: success_rate
+        aggregate_statop: avg
+        entity_statop:    avg
+        gap_severity:     unknown
+
+  - id: kbs_te_journey_time
+    title: TE end-to-end transaction time
+    description: |
+      ThousandEyes web-transactions test (TE-04) - full Selenium round
+      wall-clock time. Computed from trace spans as MAX(end_time) -
+      MIN(start_time) per trace_id, then averaged per minute. Catches
+      slow journeys before they become outright failures.
+    base_search: |
+      index=thousandeyes sourcetype="cisco:thousandeyes:trace"
+      | where test_name="NatWest Payments - end-to-end payment journey"
+      | bin _time span=1m
+      | stats min(start_time) AS t_start
+              max(end_time)   AS t_end
+              by _time, test_name, test_id, trace_id
+      | eval transaction_time_ms = (t_end - t_start) / 1000000
+      | stats avg(transaction_time_ms) AS transaction_time_ms
+              by _time, test_name, test_id
+      | rename test_name AS te_test_name
+    entity_alias_filtering_fields: te_test_name
+    entity_breakdown: true
+    metrics:
+      - id: transaction_time_ms
+        title: transaction time
+        unit: ms
+        threshold_field: transaction_time_ms
+        aggregate_statop: max
+        entity_statop:    max
+        gap_severity:     unknown
+
+  # ---------------------------------------------------------------------
+  # Compliance & security KPI base searches.
+  #
+  # Sources:
+  #   * index=nwpay_audit sourcetype="nwpay:payment_audit" - banking audit
+  #   * index=nwpay_audit sourcetype="nwpay:auth"          - SPA auth events
+  #   * index=aws_guardduty sourcetype="aws:guardduty"     - GuardDuty (Tier 3)
+  #   * index=aws_cloudtrail sourcetype="aws:cloudtrail"   - CloudTrail (Tier 3)
+  #
+  # The audit and AWS sources only populate when their respective tiers are
+  # enabled (Tier 2 audit is on by default; Tier 3 AWS Firehose is gated by
+  # var.aws_logs_to_hec_enabled). KPIs evaluate to gap_severity=unknown
+  # rather than firing false-positives when no events arrive.
+  # ---------------------------------------------------------------------
+
+  - id: kbs_business_outcomes
+    title: Business outcomes - volume, value, customers, success
+    description: |
+      Headline business KPIs derived from the structured banking audit
+      log. Drives the L1 NatWest Card Payments value-counter strip on
+      the glass table -- the four numbers an executive expects on a
+      single screen: payments per minute, value authorised in GBP,
+      customers impacted by failures in the last 5 minutes, and the
+      end-to-end success rate.
+
+      Source: index=nwpay_audit sourcetype=nwpay:payment_audit (Tier 2
+      audit pipeline, always on -- see helm/natwest-payments/values.yaml
+      api-gateway.auditEnabled=true). The api-gateway audit-tail sidecar
+      tails /var/log/audit/audit.jsonl emitted by app/audit.py and prints
+      each line to stdout; the splunk-otel agent's `transform/audit_routing`
+      processor (collector/values.yaml) routes records from any container
+      named `audit-tail` to `index=nwpay_audit sourcetype=nwpay:payment_audit`,
+      with `nwpay:auth` carved out for SPA auth-beacon events
+      (`event_type=auth`). Reads the same `decision`, `currency`,
+      `amount_minor_units` and `customer_id_hash` fields already validated
+      by app/audit.py emit_payment_audit() so the schema is stable.
+
+      `customers_impacted` is computed over a 5-minute window inside the
+      base search rather than relying on KPI aggregation, because
+      distinct-count of customer_id_hash collapses when ITSI rolls
+      multiple 1-minute buckets up with sum/avg.
+
+      Note: the demo gateway emits `decision="review"` (not `accepted`)
+      whenever a payment hits any downstream error, so success_rate_pct
+      counts both `accepted` and `review` as successful (the payment
+      cleared the gateway; review is just a flag for back-office, not
+      a customer-visible failure).
+    base_search: |
+      index=nwpay_audit sourcetype="nwpay:payment_audit" event_type=payment_audit
+      | bin _time span=1m
+      | stats count(eval(decision IN ("accepted","review")))                                    as accepted,
+              count                                                                              as total,
+              sum(eval(if(decision IN ("accepted","review") AND currency="GBP", amount_minor_units, 0))) as gbp_minor_units,
+              values(eval(if(decision IN ("rejected","throttled","error"), customer_id_hash, null()))) as failed_customers
+              by _time
+      | eval payments_per_minute = total,
+             value_authorised_gbp = round(gbp_minor_units / 100, 0),
+             success_rate_pct     = round((accepted * 100) / total, 2),
+             customers_impacted   = mvcount(failed_customers)
+      | eval customers_impacted   = coalesce(customers_impacted, 0)
+      | fields _time, payments_per_minute, value_authorised_gbp, customers_impacted, success_rate_pct
+    metrics:
+      - id: payments_per_minute
+        title: payments / minute
+        unit: count
+        threshold_field: payments_per_minute
+        aggregate_statop: avg
+        entity_statop:    avg
+        gap_severity:     unknown
+      - id: value_authorised_gbp
+        title: value authorised (GBP)
+        unit: GBP
+        threshold_field: value_authorised_gbp
+        aggregate_statop: avg
+        entity_statop:    avg
+        gap_severity:     unknown
+      - id: customers_impacted
+        title: customers impacted
+        unit: count
+        threshold_field: customers_impacted
+        aggregate_statop: max
+        entity_statop:    max
+        gap_severity:     unknown
+      - id: success_rate_pct
+        title: payment success rate
+        unit: percent
+        threshold_field: success_rate_pct
+        aggregate_statop: avg
+        entity_statop:    avg
+        gap_severity:     unknown
+
+  # ---------------------------------------------------------------------
+  # Executive / board-level KPIs for the L1 Natwest Card Payments service.
+  # Derived from the same nwpay:payment_audit stream as kbs_business_outcomes
+  # but framed as COO/CFO headline numbers for the top-down demo cut.
+  # ---------------------------------------------------------------------
+  - id: kbs_executive_kpis
+    title: Executive headline KPIs (revenue at risk, trust index, run-rate)
+    description: |
+      Three board-ready KPIs on the L1 Natwest Card Payments service:
+        * revenue_at_risk_gbp  - GBP value of declined/throttled/error payments
+                                 in the last 1-minute bucket (business impact).
+        * customer_trust_index - 0-100 composite of success rate minus a small
+                                 penalty for distinct impacted customers.
+        * transaction_run_rate_000s_hr - extrapolated hourly volume in thousands
+                                 (payments/min x 60 / 1000, smoothed over 60m).
+
+      All three are "fake executive" in presentation only — the underlying
+      signal is the structured banking audit log emitted by api-gateway
+      (app/audit.py emit_payment_audit). Steady-state demo traffic keeps
+      revenue_at_risk low and trust_index high; chaos scenarios that spike
+      declines or 5xx push revenue_at_risk up and trust_index down.
+    base_search: |
+      index=nwpay_audit sourcetype="nwpay:payment_audit" event_type=payment_audit
+      | bin _time span=1m
+      | stats count                                                                               as total,
+              count(eval(decision IN ("accepted","review")))                                        as accepted,
+              sum(eval(if(decision IN ("rejected","throttled","error") AND currency="GBP",
+                          amount_minor_units, 0)))                                                  as failed_gbp_minor,
+              dc(eval(if(decision IN ("rejected","throttled","error"), customer_id_hash, null()))) as impacted_customers
+              by _time
+      | eval revenue_at_risk_gbp = round(coalesce(failed_gbp_minor, 0) / 100, 0),
+             customer_trust_index = round(
+               min(100, max(0,
+                 if(total > 0, (accepted * 100.0 / total), 100)
+                 - (coalesce(impacted_customers, 0) * 0.25)
+               )), 1),
+             payments_per_minute  = total
+      | streamstats current=t window=60 avg(payments_per_minute) as avg_payments_per_minute
+      | eval transaction_run_rate_000s_hr = round(coalesce(avg_payments_per_minute, 0) * 60 / 1000, 2)
+      | fields _time, revenue_at_risk_gbp, customer_trust_index, transaction_run_rate_000s_hr
+    metrics:
+      - id: revenue_at_risk_gbp
+        title: revenue at risk (GBP)
+        unit: GBP
+        threshold_field: revenue_at_risk_gbp
+        aggregate_statop: max
+        entity_statop:    max
+        gap_severity:     unknown
+      - id: customer_trust_index
+        title: customer trust index
+        unit: score
+        threshold_field: customer_trust_index
+        aggregate_statop: avg
+        entity_statop:    avg
+        gap_severity:     unknown
+      - id: transaction_run_rate_000s_hr
+        title: transaction run-rate (000s/hr)
+        unit: count
+        threshold_field: transaction_run_rate_000s_hr
+        aggregate_statop: avg
+        entity_statop:    avg
+        gap_severity:     unknown
+
+  - id: kbs_decline_rate_audit
+    title: Banking audit - payment decline rate
+    description: |
+      Decline ratio over the structured banking audit log. Distinct from
+      kbs_apm_error_rate: this counts business decisions (declined,
+      throttled, fraud, sanctions) rather than technical span errors, so
+      it stays clean during retries and partial failures. Drives the
+      "audited decline rate" KPI on L1 NatWest Card Payments and the
+      Authorization tier - the demo pivot from observability metric to
+      audited business event.
+    base_search: |
+      index=nwpay_audit sourcetype="nwpay:payment_audit" event_type=payment_audit
+      | bin _time span=1m
+      | stats count(eval(decision IN ("rejected","throttled","error"))) as declined,
+              count                                                      as total,
+              count(eval(decision="rejected" AND decline_reason="sanctions_match"))  as sanctions_blocked,
+              count(eval(decision="rejected" AND decline_reason="fraud_score_high")) as fraud_blocked
+              by _time
+      | eval decline_rate    = round(declined / total, 4),
+             sanctions_rate  = round(sanctions_blocked / total, 4),
+             fraud_rate      = round(fraud_blocked / total, 4)
+    metrics:
+      - id: decline_rate
+        title: audited decline rate
+        unit: ratio
+        threshold_field: decline_rate
+        aggregate_statop: avg
+        entity_statop:    avg
+        gap_severity:     unknown
+      - id: sanctions_rate
+        title: sanctions block rate
+        unit: ratio
+        threshold_field: sanctions_rate
+        aggregate_statop: avg
+        entity_statop:    avg
+        gap_severity:     unknown
+      - id: fraud_rate
+        title: fraud block rate
+        unit: ratio
+        threshold_field: fraud_rate
+        aggregate_statop: avg
+        entity_statop:    avg
+        gap_severity:     unknown
+
+  - id: kbs_auth_failure_rate
+    title: SPA authentication failure rate
+    description: |
+      Authentication failure ratio per minute over the SPA auth beacon
+      stream. A spike here without a corresponding HTTP-error-rate spike
+      points to credential stuffing or a bad-deploy regression in the
+      login form, not an infrastructure outage.
+
+      Sources auth records by `event_type=auth` rather than by sourcetype
+      because the OTel collector OTTL transform that should carve out
+      `nwpay:auth` from the audit-tail stream relies on body regex
+      matching that does not always fire reliably; filtering on the
+      JSON-extracted `event_type` field is robust to that and works
+      whether the records land under `nwpay:auth` or the default
+      `nwpay:payment_audit` sourcetype.
+    base_search: |
+      index=nwpay_audit event_type=auth
+      | bin _time span=1m
+      | stats count(eval(outcome="failed"))         as failed,
+              count(eval(outcome="rate_limited"))   as rate_limited,
+              count                                 as total
+              by _time
+      | eval failure_rate     = round(failed / total, 4),
+             rate_limited_pct = round(rate_limited / total, 4)
+    metrics:
+      - id: failure_rate
+        title: auth failure rate
+        unit: ratio
+        threshold_field: failure_rate
+        aggregate_statop: avg
+        entity_statop:    avg
+        gap_severity:     unknown
+      - id: rate_limited_pct
+        title: auth rate-limited rate
+        unit: ratio
+        threshold_field: rate_limited_pct
+        aggregate_statop: avg
+        entity_statop:    avg
+        gap_severity:     unknown
+
+  - id: kbs_guardduty_findings_count
+    title: GuardDuty findings (24h)
+    description: |
+      Count of GuardDuty findings per minute by severity bucket. Source:
+      Tier 3 Firehose pipeline (terraform/aws_logs_to_hec.tf). Returns 0
+      when Tier 3 is disabled or the AWS account has no findings.
+    base_search: |
+      index=aws_guardduty sourcetype="aws:guardduty"
+      | rename detail.severity as severity
+      | bin _time span=1m
+      | stats count(eval(severity >= 7.0)) as high,
+              count(eval(severity >= 4.0 AND severity < 7.0)) as medium,
+              count(eval(severity < 4.0)) as low,
+              count                       as total
+              by _time
+    metrics:
+      - id: high
+        title: high-severity findings
+        unit: count
+        threshold_field: high
+        aggregate_statop: sum
+        entity_statop:    sum
+        gap_severity:     unknown
+      - id: medium
+        title: medium-severity findings
+        unit: count
+        threshold_field: medium
+        aggregate_statop: sum
+        entity_statop:    sum
+        gap_severity:     unknown
+      - id: total
+        title: total findings
+        unit: count
+        threshold_field: total
+        aggregate_statop: sum
+        entity_statop:    sum
+        gap_severity:     unknown
+
+  - id: kbs_cloudtrail_console_login_mfa_off
+    title: CloudTrail console logins without MFA
+    description: |
+      Counts management console logins where MFA was not used. A non-zero
+      value is an immediate compliance flag for the demo's "MFA enforced
+      on production access" claim.
+    base_search: |
+      index=aws_cloudtrail sourcetype="aws:cloudtrail"
+        eventName="ConsoleLogin"
+      | rename additionalEventData.MFAUsed as mfa_used
+      | bin _time span=5m
+      | stats count(eval(mfa_used="No"))  as logins_without_mfa,
+              count                        as total_logins
+              by _time
+    metrics:
+      - id: logins_without_mfa
+        title: logins without MFA
+        unit: count
+        threshold_field: logins_without_mfa
+        aggregate_statop: sum
+        entity_statop:    sum
+        gap_severity:     unknown
+
+  - id: kbs_te_dns
+    title: ThousandEyes DNS resolution
+    description: |
+      DNS Server availability % from TE-06 (dns.lookup.availability) -
+      catches DNS-layer outages that mask as "the app is slow" in
+      app-level metrics. The OTel v7 stream does not expose
+      dns.lookup.duration as a separate metric so resolution time is
+      not directly available here; dns_availability_pct is the
+      authoritative signal (0-100 %, where 100 = all probes resolved
+      and validated their answer set, 0 = all probes failed). The
+      test_name filter is baked into the SPL because ITSI's shared
+      indicator search collapses base_search results into a single
+      global aggregate (see note above the kbs_te_spa_avail entry).
+    base_search: |
+      index=thousandeyes sourcetype="cisco:thousandeyes:path-vis"
+      | rename "metric_name:dns.lookup.availability" AS dns_avail
+      | rename "thousandeyes.test.name"              AS test_name
+      | rename "thousandeyes.test.id"                AS test_id
+      | where test_name="NatWest Payments - DNS resolution of demo hostname" AND isnotnull(dns_avail)
+      | bin _time span=1m
+      | stats avg(dns_avail) AS dns_availability_pct
+              by _time, test_name, test_id
+      | rename test_name AS te_test_name
+    entity_alias_filtering_fields: te_test_name
+    entity_breakdown: true
+    metrics:
+      - id: dns_availability_pct
+        title: DNS availability
+        unit: percent
+        threshold_field: dns_availability_pct
+        aggregate_statop: min
+        entity_statop:    min
+        gap_severity:     unknown
+
+  # ---------------------------------------------------------------------
+  # ThousandEyes business-outcome KPI base searches.
+  #
+  # These translate raw synthetic signal into customer / revenue / SLO
+  # outcomes an executive can read at a glance:
+  #
+  #   * kbs_te_synth_post_success / _latency  - TE-05 POST /api/process
+  #     (closes the gap where TE-05 was created in TE Cloud but never
+  #      bound to an ITSI KPI).
+  #   * kbs_te_geo_reachability               - TE-01 split by EMEA/NA/APAC
+  #   * kbs_te_dx_index                       - composite 0-100 Digital
+  #                                             Experience Index across
+  #                                             the five user-facing tests
+  #   * kbs_te_journey_apdex                  - TE-04 Apdex (T=20s, F=60s)
+  #   * kbs_te_slo_burn                       - 99.9% monthly SLO burn
+  #                                             (1h + 6h fast-burn windows)
+  #   * kbs_te_revenue_at_risk                - blocked payments / GBP /
+  #                                             customers per minute,
+  #                                             baseline x (1 - synthetic
+  #                                             success rate)
+  #   * kbs_te_dns_blocked_customers          - DNS outage x baseline
+  #   * kbs_te_outage_minutes                 - count of minutes in last
+  #                                             1h where SPA avail < 99%
+  #                                             OR journey success < 50%
+  # ---------------------------------------------------------------------
+
+  - id: kbs_te_synth_post_success
+    title: TE synthetic POST /api/process success rate
+    description: |
+      ThousandEyes HTTP-server POST test (TE-05) - asserts the api-gateway
+      accepts a synthetic FPS payment write end-to-end. Success rate is
+      derived from http.server.request.availability (0-100 %) which TE
+      sets to 100 only when the response matches the configured status
+      code AND content regex (the JSON status: "accepted" / "partial"
+      check on TE-05). Closes the previous gap where TE-05 was created
+      but never had an ITSI KPI.
+    base_search: |
+      index=thousandeyes sourcetype="cisco:thousandeyes:path-vis"
+      | rename "metric_name:http.server.request.availability" AS http_avail
+      | rename "thousandeyes.test.name"                       AS test_name
+      | rename "thousandeyes.test.id"                         AS test_id
+      | where test_name="NatWest Payments - POST /api/process" AND isnotnull(http_avail)
+      | bin _time span=1m
+      | stats avg(http_avail) AS availability_pct
+              by _time, test_name, test_id
+      | eval success_rate = round(availability_pct / 100, 4)
+      | rename test_name AS te_test_name
+    entity_alias_filtering_fields: te_test_name
+    entity_breakdown: true
+    metrics:
+      - id: success_rate
+        title: synthetic POST success rate
+        unit: ratio
+        threshold_field: success_rate
+        aggregate_statop: avg
+        entity_statop:    avg
+        gap_severity:     unknown
+
+  - id: kbs_te_synth_post_latency
+    title: TE synthetic POST /api/process p95 latency
+    description: |
+      ThousandEyes HTTP-server POST test (TE-05) - p95 wall-clock time
+      from request send to last byte received. http.client.request.duration
+      is delivered in OTel seconds; converted to milliseconds.
+    base_search: |
+      index=thousandeyes sourcetype="cisco:thousandeyes:path-vis"
+      | rename "metric_name:http.client.request.duration" AS http_dur_s
+      | rename "thousandeyes.test.name"                   AS test_name
+      | rename "thousandeyes.test.id"                     AS test_id
+      | where test_name="NatWest Payments - POST /api/process" AND isnotnull(http_dur_s)
+      | eval response_time_ms = http_dur_s * 1000
+      | bin _time span=1m
+      | stats perc95(response_time_ms) AS p95_ms
+              by _time, test_name, test_id
+      | rename test_name AS te_test_name
+    entity_alias_filtering_fields: te_test_name
+    entity_breakdown: true
+    metrics:
+      - id: p95_ms
+        title: synthetic POST p95 latency
+        unit: ms
+        threshold_field: p95_ms
+        aggregate_statop: max
+        entity_statop:    max
+        gap_severity:     unknown
+
+  - id: kbs_te_geo_reachability
+    title: TE geographic reachability (EMEA / NA / APAC)
+    description: |
+      ThousandEyes HTTP-server test (TE-01) split by cloud-agent location
+      and bucketed into EMEA / NA / APAC regions. Tells the operator
+      which geography is degraded ("the bank is unreachable from APAC
+      right now") rather than just a single global average. The default
+      agent allocation in scripts/08-configure-thousandeyes.sh selects
+      London / Frankfurt / Amsterdam (EMEA), New York (NA) and
+      Singapore (APAC), so the regex below covers those plus a wider
+      set of common TE cloud-agent location names so adding more agents
+      doesn't silently drop into the OTHER bucket.
+    base_search: |
+      index=thousandeyes sourcetype="cisco:thousandeyes:path-vis"
+      | rename "metric_name:http.server.request.availability" AS http_avail
+      | rename "thousandeyes.test.name"                       AS test_name
+      | rename "thousandeyes.source.agent.location"           AS agent_loc
+      | where test_name="NatWest Payments - SPA login page" AND isnotnull(http_avail)
+      | eval region = case(
+            match(agent_loc, "(?i)(London|Frankfurt|Amsterdam|Paris|Dublin|Madrid|Milan|Stockholm|Berlin|Manchester|Zurich|Vienna|Brussels|Warsaw|Copenhagen|Helsinki|Lisbon|Oslo|Rome|Athens|Prague)"), "EMEA",
+            match(agent_loc, "(?i)(New York|San Francisco|Chicago|Dallas|Los Angeles|Seattle|Atlanta|Toronto|Vancouver|Montreal|Miami|Washington|Boston|Denver|Phoenix|Houston|Mexico)"),                "NA",
+            match(agent_loc, "(?i)(Singapore|Tokyo|Hong Kong|Sydney|Mumbai|Seoul|Bangkok|Jakarta|Beijing|Shanghai|Manila|Taipei|Melbourne|Auckland|Kuala Lumpur|Delhi|Bangalore|Chennai|Osaka)"), "APAC",
+            true(), "OTHER")
+      | bin _time span=1m
+      | stats avg(http_avail) AS avail_pct by _time, region
+      | eval emea_pct = case(region="EMEA", avail_pct),
+             na_pct   = case(region="NA",   avail_pct),
+             apac_pct = case(region="APAC", avail_pct)
+      | stats max(emea_pct) AS emea_pct,
+              max(na_pct)   AS na_pct,
+              max(apac_pct) AS apac_pct
+              by _time
+      | eval te_test_name = "NatWest Payments - SPA login page"
+    entity_alias_filtering_fields: te_test_name
+    entity_breakdown: true
+    metrics:
+      - id: emea_pct
+        title: EMEA reachability
+        unit: percent
+        threshold_field: emea_pct
+        aggregate_statop: min
+        entity_statop:    min
+        gap_severity:     unknown
+      - id: na_pct
+        title: NA reachability
+        unit: percent
+        threshold_field: na_pct
+        aggregate_statop: min
+        entity_statop:    min
+        gap_severity:     unknown
+      - id: apac_pct
+        title: APAC reachability
+        unit: percent
+        threshold_field: apac_pct
+        aggregate_statop: min
+        entity_statop:    min
+        gap_severity:     unknown
+
+  - id: kbs_te_dx_index
+    title: TE composite Digital Experience Index (0-100)
+    description: |
+      Single 0-100 score blending the five user-facing ThousandEyes tests
+      with the same weighting an exec dashboard tile would use:
+        0.30 * SPA availability (TE-01)
+        0.30 * API gateway availability (TE-02)
+        0.20 * end-to-end journey success (TE-04, scaled to 0-100)
+        0.10 * page-load Apdex (TE-03; 1.0 if <=3s, 0.5 if <=8s, else 0)
+        0.10 * DNS availability (TE-06)
+      Missing inputs default to 100 (treat as healthy) so a sparse 15min
+      cadence test (TE-04) doesn't drag the index down between probes.
+      multisearch with a per-leg src tag avoids cross-test cardinality
+      blow-up that a join would create.
+    base_search: |
+      | multisearch
+          [ search index=thousandeyes sourcetype="cisco:thousandeyes:path-vis"
+              "thousandeyes.test.name"="NatWest Payments - SPA login page"
+            | rename "metric_name:http.server.request.availability" AS spa_avail
+            | where isnotnull(spa_avail)
+            | eval src="spa", val=spa_avail ]
+          [ search index=thousandeyes sourcetype="cisco:thousandeyes:path-vis"
+              "thousandeyes.test.name"="NatWest Payments - API gateway recent"
+            | rename "metric_name:http.server.request.availability" AS api_avail
+            | where isnotnull(api_avail)
+            | eval src="api", val=api_avail ]
+          [ search index=thousandeyes sourcetype="cisco:thousandeyes:path-vis"
+              "thousandeyes.test.name"="NatWest Payments - end-to-end payment journey"
+            | rename "metric_name:web.transaction.completion" AS journey_succ
+            | where isnotnull(journey_succ)
+            | eval src="journey", val=journey_succ*100 ]
+          [ search index=thousandeyes sourcetype="cisco:thousandeyes:path-vis"
+              "thousandeyes.test.name"="NatWest Payments - SPA login page-load"
+            | rename "metric_name:web.page_load.duration" AS pl_s
+            | where isnotnull(pl_s)
+            | eval pl_ms = pl_s * 1000,
+                   pl_apdex = case(pl_ms <= 3000, 1.0, pl_ms <= 8000, 0.5, true(), 0.0),
+                   src = "pageload", val = pl_apdex * 100 ]
+          [ search index=thousandeyes sourcetype="cisco:thousandeyes:path-vis"
+              "thousandeyes.test.name"="NatWest Payments - DNS resolution of demo hostname"
+            | rename "metric_name:dns.lookup.availability" AS dns_avail
+            | where isnotnull(dns_avail)
+            | eval src="dns", val=dns_avail ]
+      | bin _time span=1m
+      | stats avg(eval(if(src="spa",      val, null()))) AS spa_score,
+              avg(eval(if(src="api",      val, null()))) AS api_score,
+              avg(eval(if(src="journey",  val, null()))) AS journey_score,
+              avg(eval(if(src="pageload", val, null()))) AS pageload_score,
+              avg(eval(if(src="dns",      val, null()))) AS dns_score
+              by _time
+      | eval spa_score      = coalesce(spa_score, 100),
+             api_score      = coalesce(api_score, 100),
+             journey_score  = coalesce(journey_score, 100),
+             pageload_score = coalesce(pageload_score, 100),
+             dns_score      = coalesce(dns_score, 100)
+      | eval dx_index = round(0.30 * spa_score
+                            + 0.30 * api_score
+                            + 0.20 * journey_score
+                            + 0.10 * pageload_score
+                            + 0.10 * dns_score, 1)
+    metrics:
+      - id: dx_index
+        title: digital experience index
+        unit: score
+        threshold_field: dx_index
+        aggregate_statop: avg
+        entity_statop:    avg
+        gap_severity:     unknown
+
+  - id: kbs_te_journey_apdex
+    title: TE end-to-end journey Apdex (T 20s / F 60s)
+    description: |
+      Apdex score for the TE-04 web-transaction journey. Per Apdex:
+        Apdex = (satisfied + 0.5 * tolerating) / total
+      where satisfied = transactions <= T, tolerating = T < t <= F. T
+      and F here are 20s / 60s, matching the TE test transactionTimeLimit
+      (60s) and the in-flight UX target. Drives the "Journey Apdex" KPI
+      on the synthetic outcomes service - more diagnostic than a binary
+      success rate because slow journeys still count as 0.5. Title
+      uses '/' instead of '=' because the ITSI REST API rejects '=' in
+      kpi_base_search titles.
+    base_search: |
+      index=thousandeyes sourcetype="cisco:thousandeyes:trace"
+      | where test_name="NatWest Payments - end-to-end payment journey"
+      | bin _time span=1m
+      | stats min(start_time) AS t_start,
+              max(end_time)   AS t_end
+              by _time, test_name, test_id, trace_id
+      | eval tx_ms = (t_end - t_start) / 1000000
+      | stats count(eval(tx_ms <= 20000))                   AS satisfied,
+              count(eval(tx_ms > 20000 AND tx_ms <= 60000)) AS tolerating,
+              count                                         AS total
+              by _time, test_name
+      | rename test_name AS te_test_name
+      | eval apdex = round((satisfied + 0.5 * tolerating) / total, 3)
+    entity_alias_filtering_fields: te_test_name
+    entity_breakdown: true
+    metrics:
+      - id: apdex
+        title: journey Apdex
+        unit: score
+        threshold_field: apdex
+        aggregate_statop: avg
+        entity_statop:    avg
+        gap_severity:     unknown
+
+  - id: kbs_te_slo_burn
+    title: TE journey SLO error-budget burn rate (99.9%)
+    description: |
+      Multi-window error-budget burn rate for the TE-04 journey against
+      a 99.9% monthly success SLO. Per Google SRE multi-window fast-burn:
+        burn = (1 - success_rate_window) / (1 - SLO)
+      Critical when 1h burn > 14.4 (ie. 2% of monthly budget burned in
+      the last hour). Window is computed via streamstats over per-minute
+      rows; TE-04 cadence is 15 min so 1h yields ~4 samples and 6h
+      yields ~24, which is enough signal-to-noise for the demo.
+    base_search: |
+      index=thousandeyes sourcetype="cisco:thousandeyes:path-vis"
+        "thousandeyes.test.name"="NatWest Payments - end-to-end payment journey"
+      | rename "metric_name:web.transaction.completion" AS tx_completion
+      | where isnotnull(tx_completion)
+      | bin _time span=1m
+      | stats avg(tx_completion) AS success_rate by _time
+      | streamstats current=t window=60  avg(success_rate) AS success_rate_1h
+      | streamstats current=t window=360 avg(success_rate) AS success_rate_6h
+      | eval burn_1h = round((1 - coalesce(success_rate_1h, 1.0)) / 0.001, 2),
+             burn_6h = round((1 - coalesce(success_rate_6h, 1.0)) / 0.001, 2),
+             te_test_name = "NatWest Payments - end-to-end payment journey"
+    entity_alias_filtering_fields: te_test_name
+    entity_breakdown: true
+    metrics:
+      - id: burn_1h
+        title: SLO 1h fast-burn
+        unit: x
+        threshold_field: burn_1h
+        aggregate_statop: max
+        entity_statop:    max
+        gap_severity:     unknown
+      - id: burn_6h
+        title: SLO 6h fast-burn
+        unit: x
+        threshold_field: burn_6h
+        aggregate_statop: max
+        entity_statop:    max
+        gap_severity:     unknown
+
+  - id: kbs_te_revenue_at_risk
+    title: TE revenue / customers at risk (synthetic-driven)
+    description: |
+      Cross-references the TE-04 success rate with the live banking-audit
+      baseline to estimate, per minute:
+        blocked_payments_per_min  = baseline_payments_per_min  * (1 - synthetic_success)
+        gbp_at_risk_per_min       = baseline_gbp_per_min       * (1 - synthetic_success)
+        customers_blocked_per_min = baseline_customers_per_min * (1 - synthetic_success)
+      Baseline figures are an avg over the last hour of audit events
+      (index=nwpay_audit sourcetype="nwpay:payment_audit", same source
+      kbs_business_outcomes uses) so this stays steady even when TE-04's
+      15-minute cadence makes synthetic data sparse. The result is
+      "what your customers are losing right now if the synthetic check
+      is right" - the most CFO-friendly KPI in the tree.
+    base_search: |
+      | multisearch
+          [ search index=thousandeyes sourcetype="cisco:thousandeyes:path-vis"
+              "thousandeyes.test.name"="NatWest Payments - end-to-end payment journey"
+            | rename "metric_name:web.transaction.completion" AS tx_completion
+            | where isnotnull(tx_completion)
+            | eval src="te", te_success_rate = tx_completion ]
+          [ search index=nwpay_audit sourcetype="nwpay:payment_audit"
+            | eval src="audit",
+                   audit_payment = 1,
+                   audit_gbp     = if(currency="GBP", amount_minor_units / 100.0, 0),
+                   audit_cust    = customer_id_hash ]
+      | bin _time span=1m
+      | stats avg(eval(if(src="te",    te_success_rate, null()))) AS te_success_rate,
+              sum(eval(if(src="audit", audit_payment,   null()))) AS pmin,
+              sum(eval(if(src="audit", audit_gbp,       null()))) AS gbpmin,
+              dc(audit_cust)                                       AS cmin
+              by _time
+      | streamstats current=t window=60 avg(pmin) AS baseline_pmin,
+                                        avg(gbpmin) AS baseline_gbpmin,
+                                        avg(cmin) AS baseline_cmin
+      | eval failure_factor = 1 - coalesce(te_success_rate, 1.0),
+             blocked_payments_per_min  = round(coalesce(baseline_pmin, 0)   * failure_factor, 1),
+             gbp_at_risk_per_min       = round(coalesce(baseline_gbpmin, 0) * failure_factor, 0),
+             customers_blocked_per_min = round(coalesce(baseline_cmin, 0)   * failure_factor, 0),
+             te_test_name = "NatWest Payments - end-to-end payment journey"
+      | fields _time, blocked_payments_per_min, gbp_at_risk_per_min, customers_blocked_per_min, te_test_name
+    entity_alias_filtering_fields: te_test_name
+    entity_breakdown: true
+    metrics:
+      - id: blocked_payments_per_min
+        title: blocked payments / min
+        unit: count
+        threshold_field: blocked_payments_per_min
+        aggregate_statop: max
+        entity_statop:    max
+        gap_severity:     unknown
+      - id: gbp_at_risk_per_min
+        title: GBP at risk / min
+        unit: GBP
+        threshold_field: gbp_at_risk_per_min
+        aggregate_statop: max
+        entity_statop:    max
+        gap_severity:     unknown
+      - id: customers_blocked_per_min
+        title: customers blocked / min
+        unit: count
+        threshold_field: customers_blocked_per_min
+        aggregate_statop: max
+        entity_statop:    max
+        gap_severity:     unknown
+
+  - id: kbs_te_dns_blocked_customers
+    title: TE DNS-outage blocked customers (synthetic-driven)
+    description: |
+      DNS-layer outage blast radius. dns_avail/100 from TE-06 multiplied
+      against the audit-log baseline to give "customers / min unable to
+      reach the bank because DNS is broken". Different signal from
+      kbs_te_revenue_at_risk because DNS failures don't show up in
+      app-level error rates - the resolver simply doesn't return an
+      address, the client never connects, and APM stays green.
+    base_search: |
+      | multisearch
+          [ search index=thousandeyes sourcetype="cisco:thousandeyes:path-vis"
+              "thousandeyes.test.name"="NatWest Payments - DNS resolution of demo hostname"
+            | rename "metric_name:dns.lookup.availability" AS dns_avail
+            | where isnotnull(dns_avail)
+            | eval src="dns", dns_ratio = dns_avail / 100.0 ]
+          [ search index=nwpay_audit sourcetype="nwpay:payment_audit"
+            | eval src="audit", audit_payment = 1 ]
+      | bin _time span=1m
+      | stats avg(eval(if(src="dns",   dns_ratio,     null()))) AS dns_ratio,
+              sum(eval(if(src="audit", audit_payment, null()))) AS pmin
+              by _time
+      | streamstats current=t window=60 avg(pmin) AS baseline_pmin
+      | eval dns_failure_factor = 1 - coalesce(dns_ratio, 1.0),
+             dns_blocked_customers_per_min = round(coalesce(baseline_pmin, 0) * dns_failure_factor, 0),
+             te_test_name = "NatWest Payments - DNS resolution of demo hostname"
+      | fields _time, dns_blocked_customers_per_min, te_test_name
+    entity_alias_filtering_fields: te_test_name
+    entity_breakdown: true
+    metrics:
+      - id: dns_blocked_customers_per_min
+        title: DNS-blocked customers / min
+        unit: count
+        threshold_field: dns_blocked_customers_per_min
+        aggregate_statop: max
+        entity_statop:    max
+        gap_severity:     unknown
+
+  - id: kbs_te_outage_minutes
+    title: TE synthetic outage minutes (rolling 1h)
+    description: |
+      Counts minutes in the last 60 where either the SPA HTTP probe
+      (TE-01) reported avail < 99% OR the end-to-end journey (TE-04)
+      reported success < 50%. Rolling sum gives a stable "minutes of
+      synthetic outage in the last hour" KPI suitable for a single-value
+      tile (binary outage/up flag is too noisy to plot directly).
+    base_search: |
+      | multisearch
+          [ search index=thousandeyes sourcetype="cisco:thousandeyes:path-vis"
+              "thousandeyes.test.name"="NatWest Payments - SPA login page"
+            | rename "metric_name:http.server.request.availability" AS spa_avail
+            | where isnotnull(spa_avail)
+            | eval src="spa", v = spa_avail,
+                   te_test_name="NatWest Payments - SPA login page" ]
+          [ search index=thousandeyes sourcetype="cisco:thousandeyes:path-vis"
+              "thousandeyes.test.name"="NatWest Payments - end-to-end payment journey"
+            | rename "metric_name:web.transaction.completion" AS journey
+            | where isnotnull(journey)
+            | eval src="journey", v = journey * 100,
+                   te_test_name="NatWest Payments - end-to-end payment journey" ]
+      | bin _time span=1m
+      | stats min(v) AS v by _time, te_test_name, src
+      | eval is_outage = case(
+            src="spa" AND v < 99, 1,
+            src="journey" AND v < 50, 1,
+            true(), 0)
+      | streamstats current=t window=60 sum(is_outage) AS outage_minutes_1h by te_test_name
+      | fields _time, outage_minutes_1h, te_test_name
+    entity_alias_filtering_fields: te_test_name
+    entity_breakdown: true
+    metrics:
+      - id: outage_minutes_1h
+        title: outage minutes (1h)
+        unit: minutes
+        threshold_field: outage_minutes_1h
+        aggregate_statop: max
+        entity_statop:    max
+        gap_severity:     unknown
+
+# ---------------------------------------------------------------------------
+# Service definitions.
+#
+# `key` is used as ITSI _key for idempotency. `depends_on` references other
+# `key`s. KPIs reference a kpi_base_searches.id + metric_id, with optional
+# extra `filters` (KQL-like; rendered into the SPL `where` clause).
+# ---------------------------------------------------------------------------
+services:
+
+  # -------------------------------- L1 ------------------------------------
+  - key: nwpay_l1
+    title: Natwest Card Payments
+    description: Top-level customer-facing card payments service.
+    severity_aggregation: max
+    # Keep executive KPI thresholds active under demo_steady_state_green so
+    # the COO tiles deflect during chaos without pinning L1 red at baseline.
+    demo_threshold_kpi_titles:
+      - Revenue at risk (GBP)
+      - Customer trust index
+      - Customers impacted
+      - Payment success rate %
+      - Audited decline rate
+    depends_on:
+      # Payment Services rolls up through API Gateway (L1 → gateway → payment).
+      # Tier, location, DCE and synthetic outcomes are peer L2 tiles under L1.
+      # NOTE: nwpay_l5_aws_security removed -- service was deleted from
+      # ITSI on 2026-05-01.
+      - nwpay_l3_api_gateway
+      - nwpay_l2_customer_tier_experience
+      - nwpay_l2_payment_by_location
+      - nwpay_l2_dce
+      - nwpay_l2_synth_outcomes
+    kpis:
+      # Executive / board headline strip — three COO numbers backed by
+      # kbs_executive_kpis (audit-log derived, exec-friendly units).
+      - { title: Revenue at risk (GBP),           base_search_id: kbs_executive_kpis,   metric_id: revenue_at_risk_gbp,           weight: 5, threshold: { critical: 25000, warning: 5000 } }
+      - { title: Customer trust index,           base_search_id: kbs_executive_kpis,   metric_id: customer_trust_index,          weight: 5, threshold: { critical_low: 85.0, warning_low: 92.0 } }
+      - { title: Transaction run-rate (000s/hr), base_search_id: kbs_executive_kpis,   metric_id: transaction_run_rate_000s_hr,  weight: 3 }
+
+      # Headline business outcomes -- the four numbers an executive
+      # expects on a single screen. payments_per_minute and
+      # value_authorised_gbp have no thresholds (volume metrics, not
+      # health signals); customers_impacted is high-is-bad with a
+      # generous warning band because zero would be misleading
+      # under steady-state synthetic traffic; success_rate_pct uses
+      # critical_low/warning_low because the metric is positive.
+      - { title: Payments / minute,       base_search_id: kbs_business_outcomes, metric_id: payments_per_minute,  weight: 5 }
+      - { title: Value authorised (GBP),  base_search_id: kbs_business_outcomes, metric_id: value_authorised_gbp, weight: 5 }
+      - { title: Customers impacted,      base_search_id: kbs_business_outcomes, metric_id: customers_impacted,   weight: 4, threshold: { critical: 50, warning: 10 } }
+      - { title: Payment success rate %,  base_search_id: kbs_business_outcomes, metric_id: success_rate_pct,     weight: 5, threshold: { critical_low: 90.0, warning_low: 95.0 } }
+
+      # Audited business event KPIs - the pivot from observability metric to
+      # ledger-truth. Thresholds intentionally generous because in a steady
+      # demo state we expect ~3% throttle on bronze + a small simulated
+      # error background, so anything above 5% is genuinely interesting.
+      - { title: Audited decline rate, base_search_id: kbs_decline_rate_audit, metric_id: decline_rate,  weight: 5, threshold: { critical: 0.10, warning: 0.05 } }
+      - { title: Sanctions block rate, base_search_id: kbs_decline_rate_audit, metric_id: sanctions_rate, weight: 3, threshold: { critical: 0.05, warning: 0.02 } }
+      - { title: Auth failure rate,    base_search_id: kbs_auth_failure_rate,  metric_id: failure_rate,  weight: 4, threshold: { critical: 0.30, warning: 0.10 } }
+
+  # ---------------------- L2 Experience Services --------------------------
+  # Customer-facing supporting services - the "EXPERIENCE SERVICES" row
+  # in the platform architecture diagram (User, Notification, Customer
+  # Profile, Limits).
+  - key: nwpay_l2_experience
+    title: Experience Services
+    description: |
+      Customer-facing supporting services: identity (user-service),
+      profile (customer-profile-service), spending limits, and customer
+      notifications. Maps to the EXPERIENCE SERVICES row of the platform
+      architecture diagram.
+    severity_aggregation: weighted_avg
+    depends_on:
+      - nwpay_l3_user_service
+      - nwpay_l3_customer_profile_service
+      - nwpay_l3_limits_service
+      - nwpay_l3_notification_service
+      - nwpay_l2_payment_networks
+    kpis: []
+
+  # ---------------------- L2 Payment Services -----------------------------
+  # Core payment flow - the "PAYMENT SERVICES" row in the platform
+  # architecture diagram (initiation, validation, routing, fee/pricing,
+  # status). Experience and Business services are siblings under API
+  # Gateway, not children here. Payment Networks is a separate L2 tile.
+  - key: nwpay_l2_payment
+    title: Payment Services
+    description: |
+      Core payment flow: initiation, validation, routing, fee/pricing
+      and status. Experience and Business capabilities are peer subtrees
+      under API Gateway; Payment Networks is a separate L2 service.
+    severity_aggregation: weighted_avg
+    depends_on:
+      - nwpay_l3_payment_initiation_service
+      - nwpay_l3_payment_validation_service
+      - nwpay_l3_routing_service
+      - nwpay_l3_fee_pricing_service
+      - nwpay_l3_payment_status_service
+      - nwpay_l2_payment_networks
+    kpis:
+      - { title: Payment p99 latency, base_search_id: kbs_apm_latency, metric_id: p99_ms, filter: 'service.name="payment-initiation-service"', weight: 5, threshold: { critical: 3000, warning: 1500 } }
+      - { title: Routing p99 latency, base_search_id: kbs_apm_latency, metric_id: p99_ms, filter: 'service.name="routing-service"',            weight: 3 }
+
+  # ---------------------- L2 Business Services ----------------------------
+  # Business-rule and risk services - the "BUSINESS SERVICES" row in the
+  # platform architecture diagram (Account, Beneficiary, Sanctions/AML,
+  # Fraud Detection).
+  - key: nwpay_l2_business
+    title: Business Services
+    description: |
+      Business-rule and risk services: account, beneficiary, sanctions/
+      AML, and fraud detection. Maps to the BUSINESS SERVICES row of the
+      platform architecture diagram.
+    severity_aggregation: weighted_avg
+    depends_on:
+      - nwpay_l3_account_service
+      - nwpay_l3_beneficiary_service
+      - nwpay_l3_sanctions_aml_service
+      - nwpay_l3_fraud_detection_service
+      - nwpay_l2_payment_networks
+    kpis:
+      - { title: Sanctions cache miss, base_search_id: kbs_cache_miss_rate,   metric_id: miss_rate,  weight: 3, threshold: { warning: 0.10 } }
+      - { title: Fraud block rate,     base_search_id: kbs_decline_rate_audit, metric_id: fraud_rate, weight: 3, threshold: { critical: 0.05, warning: 0.02 } }
+
+  # ---------------------- L2 Ledger & Settlement Services -----------------
+  # Folds the previous Booking + Settlement L2s into a single capability
+  # tier that maps to the "LEDGER & SETTLEMENT SERVICES" row of the
+  # platform architecture diagram.
+  - key: nwpay_l2_ledger_settlement
+    title: Ledger & Settlement Services
+    description: |
+      System-of-record (ledger), Kafka-driven settlement, reconciliation
+      and reporting. Maps to the LEDGER & SETTLEMENT SERVICES row of the
+      platform architecture diagram.
+    severity_aggregation: weighted_avg
+    depends_on:
+      - nwpay_l3_ledger_service
+      - nwpay_l3_settlement_service
+      - nwpay_l3_reconciliation_service
+      - nwpay_l3_reporting_service
+      - nwpay_l2_payment_networks
+    kpis:
+      - { title: Ledger p99 latency,    base_search_id: kbs_apm_latency,    metric_id: p99_ms,     filter: 'service.name="ledger-service"',     weight: 5, threshold: { critical: 800, warning: 400 } }
+      - { title: Ledger error rate,     base_search_id: kbs_apm_error_rate, metric_id: error_rate, filter: 'service.name="ledger-service"',     weight: 5, threshold: { critical: 0.02, warning: 0.005 } }
+      - { title: Settlement Kafka lag,  base_search_id: kbs_kafka_lag,      metric_id: lag,                                                      weight: 5, threshold: { critical: 1000, warning: 250 } }
+      - { title: Settlement error rate, base_search_id: kbs_apm_error_rate, metric_id: error_rate, filter: 'service.name="settlement-service"', weight: 3 }
+
+  # ---------------------- L2 Payment Networks -----------------------------
+  # External payment scheme adapters - the "Payment Networks (External)"
+  # column in the platform architecture diagram. Each scheme is its own
+  # L3 service with per-scheme p99 + error-rate KPIs (auto-generated from
+  # the `microservices` block below) so an outage on (say) SWIFT shows up
+  # cleanly without dragging the whole tier red.
+  - key: nwpay_l2_payment_networks
+    title: Payment Networks
+    description: |
+      External payment scheme connectors. Each scheme - Faster Payments,
+      Bacs, CHAPS, SWIFT, SEPA and Cheque clearing - is its own L3
+      service with per-scheme p99 latency and error-rate KPIs.
+    severity_aggregation: weighted_avg
+    depends_on:
+      - nwpay_l3_faster_payments_network
+      - nwpay_l3_bacs_network
+      - nwpay_l3_chaps_network
+      - nwpay_l3_swift_network
+      - nwpay_l3_sepa_network
+      - nwpay_l3_cheque_clearing_network
+    kpis:
+      - { title: Network error rate (all schemes), base_search_id: kbs_apm_error_rate, metric_id: error_rate, filter: 'service.name IN ("faster-payments-network","bacs-network","chaps-network","swift-network","sepa-network","cheque-clearing-network")', weight: 5, threshold: { critical: 0.05, warning: 0.02 } }
+
+  # ---------------------- L2 Digital Customer Experience ------------------
+  # Synthetic-first view of the bank-as-a-customer-sees-it. Fed exclusively
+  # by ThousandEyes via the Cisco add-on, so this tier stays green even
+  # when there's no live customer traffic - critical for the demo's
+  # "ITSI tells you the bank works at 03:00 UTC" narrative.
+  #
+  # 7 KPIs split across the 6 ThousandEyes tests created by
+  # scripts/08-configure-thousandeyes.sh:
+  #   1. SPA availability       (TE-01 - HTTP server)
+  #   2. SPA response time      (TE-01 - HTTP server)
+  #   3. API gateway availability (TE-02 - HTTP server)
+  #   4. SPA page-load time     (TE-03 - page-load)
+  #   5. End-to-end transaction success (TE-04 - web-transactions)
+  #   6. End-to-end transaction time    (TE-04 - web-transactions)
+  #   7. DNS resolution time    (TE-06 - dns-server)
+  - key: nwpay_l2_dce
+    title: Digital Customer Experience
+    description: |
+      Synthetic Digital Customer Experience tier driven by ThousandEyes.
+      Tells the operator whether the bank is reachable, fast and
+      working end-to-end from known geographies, independent of live
+      RUM traffic. The "is the canary alive" tier.
+    severity_aggregation: weighted_avg
+    steady_state_disable_entity_breakdown: true
+    depends_on: []
+    entity_rules:
+      - rule_condition: AND
+        rule_items:
+          - field: entity_family
+            field_type: informational
+            rule_type: matches
+            value: thousandeyes_dce
+    kpis:
+      # Each TE KPI binds 1:1 to a per-test base_search (see comment in
+      # the kbs_te_* section). The test_name filter is baked into each
+      # base_search SPL, so no `filter:` clause is needed here.
+      - title: 'TE: SPA availability'
+        description: |
+          ThousandEyes HTTP-server test (TE-01) probing the public SPA login page from
+          5 cloud agents (London, Frankfurt, Amsterdam, NYC, Singapore). Per-minute
+          availability percentage averaged across agents - what proportion of probes
+          received a successful HTTP response within the test's timeout. Critical
+          below 99.0 / warning below 99.9. Sourcetype cisco:thousandeyes:path-vis.
+        base_search_id: kbs_te_spa_avail
+        metric_id: availability_pct
+        weight: 5
+        threshold: { critical_low: 99.0, warning_low: 99.9 }
+      - title: 'TE: SPA response time'
+        description: |
+          ThousandEyes HTTP-server test (TE-01) - average HTTP response time for the
+          SPA login page across the same 5 cloud agents. Measures time from request
+          send to last byte received, so it includes DNS, TCP, TLS, server time and
+          payload transfer. Critical above 5000 ms / warning above 3000 ms.
+          Sourcetype cisco:thousandeyes:path-vis.
+        base_search_id: kbs_te_spa_response_time
+        metric_id: response_time_ms
+        weight: 3
+        threshold: { critical: 5000, warning: 3000 }
+      - title: 'TE: API gateway availability'
+        description: |
+          ThousandEyes HTTP-server test (TE-02) hitting GET /api/v1/payments/recent on
+          the public API gateway from 3 cloud agents. Per-minute availability % across
+          agents - tells us the gateway answered, independent of whether the SPA bundle
+          rendered. Critical below 99.0 / warning below 99.9. Sourcetype
+          cisco:thousandeyes:path-vis.
+        base_search_id: kbs_te_api_gateway_avail
+        metric_id: availability_pct
+        weight: 5
+        threshold: { critical_low: 99.0, warning_low: 99.9 }
+      - title: 'TE: SPA page-load time'
+        description: |
+          ThousandEyes page-load test (TE-03) - browser-driven full page load of the
+          SPA login URL from 3 cloud agents. Includes DOM parse + render and all
+          subresource fetches (JS, CSS, fonts, RUM beacon). The user-perceived "first
+          screen" timing. Critical above 8000 ms / warning above 5000 ms. Sourcetype
+          cisco:thousandeyes:path-vis.
+        base_search_id: kbs_te_spa_page_load
+        metric_id: page_load_ms
+        weight: 3
+        threshold: { critical: 8000, warning: 5000 }
+      - title: 'TE: End-to-end journey success'
+        description: |
+          ThousandEyes web-transactions test (TE-04) running the full Selenium
+          payment journey (login -> send money -> status check) from 2 cloud agents.
+          Success rate from web.transaction.completion (1=success, 0=fail) averaged
+          per minute. The single most demo-critical KPI: it asserts the full critical
+          path works end-to-end. Critical below 95% / warning below 99%. Sourcetype
+          cisco:thousandeyes:path-vis.
+        base_search_id: kbs_te_journey_success
+        metric_id: success_rate
+        weight: 5
+        threshold: { critical_low: 0.95, warning_low: 0.99 }
+      - title: 'TE: End-to-end journey time'
+        description: |
+          ThousandEyes web-transactions test (TE-04) - total transaction wall-clock
+          time for the full payment journey across 2 cloud agents, computed from the
+          OTel trace stream as MAX(end_time)-MIN(start_time) per trace_id. Catches
+          slow journeys before they become outright failures (a typical pre-incident
+          signal: success_rate still 100% but journey time creeping up). Critical
+          above 45000 ms / warning above 30000 ms. Sourcetype
+          cisco:thousandeyes:trace.
+        base_search_id: kbs_te_journey_time
+        metric_id: transaction_time_ms
+        weight: 3
+        threshold: { critical: 45000, warning: 30000 }
+      - title: 'TE: DNS availability'
+        description: |
+          ThousandEyes DNS-server test (TE-06) resolving the demo public hostname
+          from 5 cloud agents against the configured authoritative resolvers.
+          Per-minute availability % across agents (dns.lookup.availability) -
+          0 = all probes failed (NXDOMAIN, SERVFAIL, timeout, or answer-set
+          mismatch), 100 = all probes resolved and validated. Catches DNS-layer
+          outages that surface as "the app is slow" in higher-layer metrics.
+          Critical below 99.0 / warning below 99.9. Sourcetype
+          cisco:thousandeyes:path-vis.
+        base_search_id: kbs_te_dns
+        metric_id: dns_availability_pct
+        weight: 2
+        threshold: { critical_low: 99.0, warning_low: 99.9 }
+      - title: 'TE: Synthetic POST success (TE-05)'
+        description: |
+          ThousandEyes HTTP-server POST test (TE-05) probing POST
+          /api/process from 3 cloud agents. Per-minute success rate
+          derived from http.server.request.availability (success
+          requires both the desired status code AND content regex
+          matching status: "accepted"|"partial"). Critical below 95%,
+          warning below 99%. Closes the gap where TE-05 was provisioned
+          but never bound to an ITSI KPI. Sourcetype
+          cisco:thousandeyes:path-vis.
+        base_search_id: kbs_te_synth_post_success
+        metric_id: success_rate
+        weight: 4
+        threshold: { critical_low: 0.95, warning_low: 0.99 }
+      - title: 'TE: Synthetic POST p95 latency (TE-05)'
+        description: |
+          ThousandEyes HTTP-server POST test (TE-05) - p95 wall-clock
+          latency from request send to last byte received. Catches a
+          slow write path before TE-04's 15-minute cadence sees the
+          first failed end-to-end journey. Critical above 5000 ms,
+          warning above 3000 ms. Sourcetype cisco:thousandeyes:path-vis.
+        base_search_id: kbs_te_synth_post_latency
+        metric_id: p95_ms
+        weight: 3
+        threshold: { critical: 5000, warning: 3000 }
+
+  # ---------------------- L2 Synthetic Business Outcomes ------------------
+  # Customer/revenue/SLO impact derived from ThousandEyes events in Splunk
+  # Enterprise, but entity drilldowns deep-link to Splunk Observability
+  # Synthetics (see nwpay_et_splunk_synthetics + ent_syn_* entities).
+  - key: nwpay_l2_synth_outcomes
+    title: Synthetic Business Outcomes
+    description: |
+      Business outcomes derived from ThousandEyes synthetic events, with
+      drilldowns to Splunk Observability Synthetics for the matching
+      canary tests. Combines TE signal with the live banking-audit baseline
+      to express customer, revenue, SLO and geographic impact.
+    severity_aggregation: weighted_avg
+    depends_on: []
+    entity_rules:
+      - rule_condition: AND
+        rule_items:
+          - field: entity_family
+            field_type: informational
+            rule_type: matches
+            value: splunk_synthetics_outcomes
+    kpis:
+      # Composite digital experience score (0-100) - the headline KPI a
+      # Head of Digital wants on a single tile.
+      - title: Digital Experience Index
+        description: |
+          Composite 0-100 score blending SPA availability (TE-01),
+          API gateway availability (TE-02), end-to-end journey success
+          (TE-04), page-load Apdex (TE-03) and DNS availability (TE-06).
+          Below 70 is critical, below 85 is warning. Weighting matches
+          the ITSI dashboard tile so the service rollup and the glass
+          table tile move together.
+        base_search_id: kbs_te_dx_index
+        metric_id: dx_index
+        weight: 5
+        threshold: { critical_low: 70, warning_low: 85 }
+
+      # Apdex on the end-to-end journey - half-credit for slow journeys
+      # surfaces creeping degradation that a binary success rate misses.
+      - title: Journey Apdex (T 20s / F 60s)
+        description: |
+          Apdex score on TE-04 web-transaction wall-clock time. Catches
+          journeys that complete but take 20-60s, before they tip over
+          into outright failures.
+        base_search_id: kbs_te_journey_apdex
+        metric_id: apdex
+        weight: 4
+        threshold: { critical_low: 0.85, warning_low: 0.95 }
+
+      # SLO error-budget burn rates against a 99.9% monthly journey-success
+      # SLO. Multi-window per Google SRE: 1h fast-burn fires when 2% of
+      # the monthly budget burns in the last hour (burn rate >= 14.4).
+      - title: SLO 1h fast-burn
+        description: |
+          (1 - success_rate_1h) / (1 - 0.999). Burn rate >= 14.4 means
+          2% of the monthly error budget consumed in the last hour -
+          page now. Burn rate >= 6 means 5%/6h - investigate.
+        base_search_id: kbs_te_slo_burn
+        metric_id: burn_1h
+        weight: 5
+        threshold: { critical: 14.4, warning: 6 }
+      - title: SLO 6h fast-burn
+        description: |
+          6h variant of the burn-rate formula. Critical at 6 (5% of the
+          monthly budget over 6 hours), warning at 3.
+        base_search_id: kbs_te_slo_burn
+        metric_id: burn_6h
+        weight: 3
+        threshold: { critical: 6, warning: 3 }
+
+      # Financial / customer-impact KPIs - the demo's "what does this
+      # cost us right now?" pivot. baseline_pmin / gbpmin / cmin come
+      # from the audit log so these stay meaningful even with sparse
+      # synthetic data.
+      - title: GBP at risk / minute
+        description: |
+          Estimated GBP / minute the bank is losing to journey failures,
+          computed as the audit-baseline GBP/minute (last 60min average)
+          multiplied by (1 - synthetic success rate). >GBP1k warning,
+          >GBP5k critical.
+        base_search_id: kbs_te_revenue_at_risk
+        metric_id: gbp_at_risk_per_min
+        weight: 5
+        threshold: { critical: 5000, warning: 1000 }
+      - title: Customers blocked / minute
+        description: |
+          Estimated unique customers / minute affected by journey failures.
+          Critical above 100 customers/min, warning above 25.
+        base_search_id: kbs_te_revenue_at_risk
+        metric_id: customers_blocked_per_min
+        weight: 4
+        threshold: { critical: 100, warning: 25 }
+      - title: Blocked payments / minute
+        description: |
+          Estimated payments / minute that would fail right now if the
+          synthetic-derived failure factor were applied to live volume.
+        base_search_id: kbs_te_revenue_at_risk
+        metric_id: blocked_payments_per_min
+        weight: 3
+        threshold: { critical: 50, warning: 10 }
+      - title: DNS-blocked customers / minute
+        description: |
+          Customers / minute unable to reach the bank because DNS is
+          failing. Distinct from the journey-failure KPI above because
+          DNS outages don't show up in app-level error rates.
+        base_search_id: kbs_te_dns_blocked_customers
+        metric_id: dns_blocked_customers_per_min
+        weight: 3
+        threshold: { critical: 50, warning: 10 }
+
+      # Synthetic outage minutes - simple ops metric that maps to SLA
+      # reporting (e.g. "we had 7 minutes of synthetic outage in the
+      # last hour").
+      - title: Synthetic outage minutes (1h)
+        description: |
+          Count of minutes in the last 60 where SPA availability < 99%
+          OR end-to-end journey success < 50%. Critical above 5 minutes
+          of outage in a rolling hour, warning above 1.
+        base_search_id: kbs_te_outage_minutes
+        metric_id: outage_minutes_1h
+        weight: 3
+        threshold: { critical: 5, warning: 1 }
+
+      # Geographic reachability - per-region bars on the glass table,
+      # plus three KPIs so a regional outage can take down the rollup
+      # of just that region without dragging the others.
+      - title: 'Geo: EMEA reachability'
+        description: |
+          Average TE-01 SPA HTTP availability across cloud agents
+          located in EMEA (London, Frankfurt, Amsterdam by default).
+        base_search_id: kbs_te_geo_reachability
+        metric_id: emea_pct
+        weight: 2
+        threshold: { critical_low: 99.0, warning_low: 99.9 }
+      - title: 'Geo: NA reachability'
+        description: |
+          Average TE-01 SPA HTTP availability across cloud agents
+          located in North America (New York by default).
+        base_search_id: kbs_te_geo_reachability
+        metric_id: na_pct
+        weight: 2
+        threshold: { critical_low: 99.0, warning_low: 99.9 }
+      - title: 'Geo: APAC reachability'
+        description: |
+          Average TE-01 SPA HTTP availability across cloud agents
+          located in Asia Pacific (Singapore by default).
+        base_search_id: kbs_te_geo_reachability
+        metric_id: apac_pct
+        weight: 2
+        threshold: { critical_low: 99.0, warning_low: 99.9 }
+
+  # ---------------------- L2 Payments by Location -------------------------
+  # Geographic split of the customer experience. KPI-only L2 leaf — no
+  # depends_on so Payment Services health does not roll up here. Madrid
+  # p95 uses a chaos-gated base search so steady state stays green; it
+  # only crosses thresholds while madrid-network-degradation is injected.
+  - key: nwpay_l2_payment_by_location
+    title: Payments by Location
+    description: |
+      Per-city p95 latency, RPS, and error rate at the api-gateway. Built
+      on kbs_payments_by_location so all rows share the same source
+      (customer.location=* server spans). Madrid p95 is chaos-gated via
+      kbs_madrid_p95_chaos_gated so only the madrid-network-degradation
+      scenario lights that KPI red.
+    severity_aggregation: max
+    kpis:
+      - title: London p95 latency
+        base_search_id: kbs_payments_by_location
+        metric_id: p95_ms
+        filter: 'customer_location="london"'
+        weight: 3
+        threshold: { critical: 1500, warning: 800 }
+      - title: Madrid p95 latency
+        description: |
+          Madrid-only gateway p95. Steady state reports 0 (green); real
+          latency is surfaced only while madrid-network-degradation chaos
+          is injected.
+        base_search_id: kbs_madrid_p95_chaos_gated
+        metric_id: p95_ms
+        weight: 5
+        threshold: { critical: 1500, warning: 800 }
+      - title: Frankfurt p95 latency
+        base_search_id: kbs_payments_by_location
+        metric_id: p95_ms
+        filter: 'customer_location="frankfurt"'
+        weight: 3
+        threshold: { critical: 1500, warning: 800 }
+      - title: Paris p95 latency
+        base_search_id: kbs_payments_by_location
+        metric_id: p95_ms
+        filter: 'customer_location="paris"'
+        weight: 3
+        threshold: { critical: 1500, warning: 800 }
+      - title: Milan p95 latency
+        base_search_id: kbs_payments_by_location
+        metric_id: p95_ms
+        filter: 'customer_location="milan"'
+        weight: 2
+        threshold: { critical: 1500, warning: 800 }
+      - title: Roaming payments p95
+        base_search_id: kbs_payments_by_location
+        metric_id: p95_ms
+        filter: 'payment_roaming="true"'
+        weight: 2
+        threshold: { critical: 1500, warning: 800 }
+      - title: Roaming payments error rate
+        base_search_id: kbs_payments_by_location
+        metric_id: error_rate
+        filter: 'payment_roaming="true"'
+        weight: 4
+        threshold: { critical: 0.05, warning: 0.02 }
+
+  # ---------------------- L2 Customer Tier Experience ---------------------
+  # L2 tile consolidating Bronze / Silver / Gold tier experience. KPI-only
+  # leaf (no depends_on). Bronze decline and Gold p95 use chaos-gated base
+  # searches so steady state stays green; thresholds only bite during inject.
+  - key: nwpay_l2_customer_tier_experience
+    title: Customer Tier Experience
+    description: |
+      Consolidated customer experience tile spanning Bronze, Silver and
+      Gold tiers. Each tier contributes 3 KPIs (decline rate, p95 latency,
+      throughput) filtered by `customer.tier`.
+    severity_aggregation: weighted_avg
+    kpis:
+      - { title: Bronze decline rate, base_search_id: kbs_tier_bronze_decline_chaos_gated, metric_id: error_rate, weight: 5, threshold: { critical: 0.08, warning: 0.05 } }
+      - { title: Bronze p95 latency,  base_search_id: kbs_apm_latency,      metric_id: p99_ms,     filter: 'service.name="payment-initiation-service" customer.tier="bronze"', weight: 3, threshold: { critical: 3000, warning: 1800 } }
+      - { title: Bronze throughput,   base_search_id: kbs_apm_request_rate, metric_id: rps,        filter: 'service.name="api-gateway" customer.tier="bronze"', weight: 1 }
+      - { title: Silver decline rate, base_search_id: kbs_apm_error_rate,   metric_id: error_rate, filter: 'service.name="api-gateway" customer.tier="silver"', weight: 5, threshold: { critical: 0.03, warning: 0.01 } }
+      - { title: Silver p95 latency,  base_search_id: kbs_apm_latency,      metric_id: p99_ms,     filter: 'service.name="payment-initiation-service" customer.tier="silver"', weight: 3, threshold: { critical: 2000, warning: 1200 } }
+      - { title: Silver throughput,   base_search_id: kbs_apm_request_rate, metric_id: rps,        filter: 'service.name="api-gateway" customer.tier="silver"', weight: 1 }
+      - { title: Gold decline rate,   base_search_id: kbs_apm_error_rate,   metric_id: error_rate, filter: 'service.name="api-gateway" customer.tier="gold"',   weight: 5, threshold: { critical: 0.01, warning: 0.005 } }
+      - { title: Gold p95 latency,    base_search_id: kbs_tier_gold_p95_chaos_gated, metric_id: p99_ms, weight: 3, threshold: { critical: 900,  warning: 500 } }
+      - { title: Gold throughput,     base_search_id: kbs_apm_request_rate, metric_id: rps,        filter: 'service.name="api-gateway" customer.tier="gold"',   weight: 1 }
+
+  # ---------------------- L3 API Gateway ----------------------------------
+  # api-gateway microservice (OTel service.name=api-gateway). Sits between
+  # Natwest Card Payments (L1) and the Payment, Experience, Business
+  # and Ledger & Settlement capability tiers.
+  - key: nwpay_l3_api_gateway
+    title: API Gateway
+    description: |
+      Synchronous customer entry point. Authenticates, authorises, rate-
+      limits and request-validates inbound traffic, then forwards into
+      the Payment Services, Experience Services, Business Services and
+      Ledger & Settlement Services capability trees.
+    severity_aggregation: weighted_avg
+    depends_on:
+      - nwpay_l2_payment
+      - nwpay_l2_experience
+      - nwpay_l2_business
+      - nwpay_l2_ledger_settlement
+    entity_rules:
+      - rule_condition: AND
+        rule_items:
+          - field: service_name
+            field_type: alias
+            rule_type: matches
+            value: api-gateway
+    kpis:
+      - { title: Gateway error rate,    base_search_id: kbs_apm_error_rate,    metric_id: error_rate,    filter: 'service.name="api-gateway"', weight: 5 }
+      - { title: Gateway request rate,  base_search_id: kbs_apm_request_rate,  metric_id: rps,           filter: 'service.name="api-gateway"', weight: 1 }
+      - { title: p99 latency,           base_search_id: kbs_apm_latency,       metric_id: p99_ms,        filter: 'service.name="api-gateway"', weight: 5 }
+      - { title: Throttle rate,         base_search_id: kbs_apm_throttle_rate, metric_id: throttle_rate,                                       weight: 2 }
+      - { title: Audited decline rate,  base_search_id: kbs_decline_rate_audit, metric_id: decline_rate, weight: 4 }
+      - { title: Auth failure rate,     base_search_id: kbs_auth_failure_rate,  metric_id: failure_rate, weight: 3 }
+
+  # ---------------------- L3 microservices --------------------------------
+  # All L3 services share the same KPI shape (p99 + error rate). Defined
+  # programmatically by the bootstrap script via the `microservices` list
+  # below to keep this file maintainable.
+
+  # ---------------------- L4 infrastructure -------------------------------
+  - key: nwpay_l4_postgres
+    title: postgres
+    description: |
+      Postgres + ledger JDBC pool health for the payment-meltdown story.
+      Four chaos-gated KPIs (pool saturation during db-slow; backends=0
+      during postgres-outage). severity_aggregation=max so one critical KPI
+      turns the Service Analyzer node red/amber — the previous eight-KPI
+      equal-weight score kept the node green when only one KPI deflected.
+    severity_aggregation: max
+    entity_rules:
+      - rule_condition: AND
+        rule_items:
+          - field: entity_family
+            field_type: informational
+            rule_type: matches
+            value: postgres_database
+    kpis:
+      # Act 1 (db-slow): HikariCP pool pins at 16/16; pending + timeouts
+      # climb as new requests cannot obtain a connection within 3 s.
+      - { title: Ledger JDBC pool in use,           base_search_id: kbs_ledger_jdbc_pool_chaos_gated, metric_id: pool_used,             weight: 5, threshold: { critical: 14, warning: 10 } }
+      - { title: Ledger JDBC pool pending,          base_search_id: kbs_ledger_jdbc_pool_chaos_gated, metric_id: pool_pending,          weight: 4, threshold: { critical: 2, warning: 1 } }
+      - { title: Ledger JDBC connection timeouts / min, base_search_id: kbs_ledger_jdbc_pool_chaos_gated, metric_id: pool_timeouts_per_min, weight: 5, threshold: { critical: 5, warning: 1 } }
+      # Act 2 (postgres-outage): exporter backends drop to 0.
+      - { title: Postgres backends online,          base_search_id: kbs_postgres_backends_chaos_gated, metric_id: backends,             weight: 5, threshold: { critical_low: 1, warning_low: 1 } }
+
+  - key: nwpay_l4_redis
+    title: redis
+    severity_aggregation: weighted_avg
+    kpis:
+      - { title: Redis evictions / min,      base_search_id: kbs_redis_health, metric_id: evictions_per_min,    weight: 5, threshold: { critical: 100, warning: 25 } }
+      - { title: Redis memory used (bytes),  base_search_id: kbs_redis_health, metric_id: memory_used_bytes,    weight: 3, threshold: { critical: 120000000, warning: 96000000 } }
+      - { title: Redis connected clients,    base_search_id: kbs_redis_health, metric_id: connected_clients,    weight: 1 }
+
+  - key: nwpay_l4_kafka
+    title: kafka
+    severity_aggregation: weighted_avg
+    entity_rules:
+      - rule_condition: AND
+        rule_items:
+          - field: entity_family
+            field_type: informational
+            rule_type: matches
+            value: kafka_broker
+    kpis:
+      # Cluster-level liveness and correctness. brokers_online and
+      # active_controller_count are the two "this should ALWAYS be 1"
+      # signals; any deviation = the cluster is gone.
+      - { title: Kafka brokers online,            base_search_id: kbs_kafka_health, metric_id: brokers_online,          weight: 5, threshold: { critical_low: 1, warning_low: 1 } }
+      - { title: Kafka active controllers,        base_search_id: kbs_kafka_health, metric_id: active_controller_count, weight: 5, threshold: { critical_low: 1, warning_low: 1 } }
+      - { title: Kafka offline partitions,        base_search_id: kbs_kafka_health, metric_id: offline_partitions,      weight: 5, threshold: { critical: 1, warning: 0 } }
+      # Replication health.
+      - { title: Kafka under-replicated,          base_search_id: kbs_kafka_health, metric_id: under_replicated,        weight: 4, threshold: { critical: 1, warning: 0 } }
+      - { title: Kafka ISR shrinks / min,         base_search_id: kbs_kafka_health, metric_id: isr_shrinks_per_min,     weight: 3, threshold: { critical: 5, warning: 1 } }
+      # Consumer / app-flow signals.
+      - { title: Kafka consumer lag,              base_search_id: kbs_kafka_lag,    metric_id: lag,                     weight: 5, threshold: { critical: 1000, warning: 250 } }
+      - { title: Kafka request p99 latency,       base_search_id: kbs_kafka_health, metric_id: request_p99_ms,          weight: 3, threshold: { critical: 200, warning: 100 } }
+      # Informational throughput context (weight=1, no thresholds).
+      - { title: Kafka messages-in / sec,         base_search_id: kbs_kafka_health, metric_id: messages_in_per_sec,     weight: 1 }
+      - { title: Kafka bytes-in / sec,            base_search_id: kbs_kafka_health, metric_id: bytes_in_per_sec,        weight: 1 }
+
+# ---------------------------------------------------------------------------
+# L3 microservices.
+#
+# The bootstrap script auto-generates one ITSI service per entry below using
+# the L3 template (depends_on from l4_deps: Postgres/Redis/Kafka as applicable;
+# two KPIs: p99 latency + error rate filtered by service.name).
+#
+# DEMO TUNING: every microservice uses unreachable thresholds so the auto-
+# generated p99 / error KPIs evaluate to normal/green under steady-state
+# traffic. Chaos colouring is driven by selective L2 KPIs
+# (demo_threshold_kpi_titles) and correlation searches — not a permanently
+# pinned orange L3 tile.
+# ---------------------------------------------------------------------------
+microservice_threshold_presets:
+  - &always_green
+    kpi_thresholds:
+      latency:    { critical: 999999, warning: 999998 }   # p99 in ms; cap = ~16 minutes
+      error_rate: { critical: 9999,   warning: 9998 }     # ratio; cap >> 1.0 so never trips
+
+microservices:
+  # Entry point — full KPI set defined explicitly in `services` above; listed
+  # here so bootstrap emits the matching OTel entity.
+  - { key: nwpay_l3_api_gateway, title: API Gateway, service_name: api-gateway, l4_deps: [], <<: *always_green }
+
+  # Authorization fan-out
+  - { key: nwpay_l3_payment_initiation_service,   title: payment-initiation-service,   service_name: payment-initiation-service,   l4_deps: [nwpay_l4_kafka],   <<: *always_green }
+  - { key: nwpay_l3_payment_validation_service,   title: payment-validation-service,   service_name: payment-validation-service,   l4_deps: [],                  <<: *always_green }
+  - { key: nwpay_l3_fraud_detection_service,      title: fraud-detection-service,      service_name: fraud-detection-service,      l4_deps: [nwpay_l4_redis],   <<: *always_green }
+  - { key: nwpay_l3_sanctions_aml_service,        title: sanctions-aml-service,        service_name: sanctions-aml-service,        l4_deps: [nwpay_l4_redis],   <<: *always_green }
+  - { key: nwpay_l3_account_service,              title: account-service,              service_name: account-service,              l4_deps: [],                  <<: *always_green }
+  - { key: nwpay_l3_beneficiary_service,          title: beneficiary-service,          service_name: beneficiary-service,          l4_deps: [],                  <<: *always_green }
+  - { key: nwpay_l3_customer_profile_service,     title: customer-profile-service,     service_name: customer-profile-service,     l4_deps: [],                  <<: *always_green }
+  - { key: nwpay_l3_user_service,                 title: user-service,                 service_name: user-service,                 l4_deps: [],                  <<: *always_green }
+  - { key: nwpay_l3_limits_service,               title: limits-service,               service_name: limits-service,               l4_deps: [],                  <<: *always_green }
+  - { key: nwpay_l3_fee_pricing_service,          title: fee-pricing-service,          service_name: fee-pricing-service,          l4_deps: [],                  <<: *always_green }
+  - { key: nwpay_l3_payment_status_service,       title: payment-status-service,       service_name: payment-status-service,       l4_deps: [],                  <<: *always_green }
+  - { key: nwpay_l3_notification_service,         title: notification-service,         service_name: notification-service,         l4_deps: [],                  <<: *always_green }
+
+  # Routing
+  - { key: nwpay_l3_routing_service,              title: routing-service,              service_name: routing-service,              l4_deps: [],                  <<: *always_green }
+
+  # Payment networks (one L3 service per external scheme - rolls up into
+  # the Payment Networks L2 sub-tier defined above).
+  - { key: nwpay_l3_faster_payments_network, title: faster-payments-network, service_name: faster-payments-network, l4_deps: [], <<: *always_green }
+  - { key: nwpay_l3_bacs_network,            title: bacs-network,            service_name: bacs-network,            l4_deps: [], <<: *always_green }
+  - { key: nwpay_l3_chaps_network,           title: chaps-network,           service_name: chaps-network,           l4_deps: [], <<: *always_green }
+  - { key: nwpay_l3_swift_network,           title: swift-network,           service_name: swift-network,           l4_deps: [], <<: *always_green }
+  - { key: nwpay_l3_sepa_network,            title: sepa-network,            service_name: sepa-network,            l4_deps: [], <<: *always_green }
+  - { key: nwpay_l3_cheque_clearing_network, title: cheque-clearing-network, service_name: cheque-clearing-network, l4_deps: [], <<: *always_green }
+
+  # Booking
+  - { key: nwpay_l3_ledger_service,               title: ledger-service,               service_name: ledger-service,               l4_deps: [nwpay_l4_postgres], <<: *always_green }
+
+  # Settlement (async)
+  - { key: nwpay_l3_settlement_service,           title: settlement-service,           service_name: settlement-service,           l4_deps: [nwpay_l4_kafka],    <<: *always_green }
+  - { key: nwpay_l3_reconciliation_service,       title: reconciliation-service,       service_name: reconciliation-service,       l4_deps: [],                   <<: *always_green }
+  - { key: nwpay_l3_reporting_service,            title: reporting-service,            service_name: reporting-service,            l4_deps: [],                   <<: *always_green }
+
+# ---------------------------------------------------------------------------
+# Entities. One entity per microservice (rolled up across pod replicas via
+# OTel service.name). Plus the in-cluster infra singletons and the Splunk
+# Enterprise EC2 itself.
+# ---------------------------------------------------------------------------
+entities:
+  # microservices - generated below by the bootstrap script from the
+  # `microservices` list. Each entity has:
+  #   identifier:   service.name = <service_name>
+  #   informational: tier=<L2 stage>, environment=demo, k8s.namespace=natwest
+
+  # ThousandEyes / Digital Customer Experience — one entity per TE test
+  # (TE-01 .. TE-06). entity_rules on nwpay_l2_dce and
+  # nwpay_l2_synth_outcomes match informational.entity_family;
+  # KPI entity breakdown joins on identifier te_test_name (same field the
+  # kbs_te_* base searches emit).
+  - _key: ent_te_01_spa
+    title: TE-01 — SPA login page
+    description: ThousandEyes HTTP-server test probing the public SPA login page.
+    entity_type_ids:
+      - nwpay_et_thousandeyes
+    identifier:
+      te_test_name: NatWest Payments - SPA login page
+    informational:
+      entity_family: thousandeyes_dce
+      te_reference: TE-01
+      te_test_id: "8540208"
+    services:
+      - key: nwpay_l2_dce
+        title: Digital Customer Experience
+
+  - _key: ent_te_02_api_gateway
+    title: TE-02 — API gateway recent
+    description: ThousandEyes HTTP-server test hitting GET /api/v1/payments/recent.
+    entity_type_ids:
+      - nwpay_et_thousandeyes
+    identifier:
+      te_test_name: NatWest Payments - API gateway recent
+    informational:
+      entity_family: thousandeyes_dce
+      te_reference: TE-02
+      te_test_id: "8540215"
+    services:
+      - key: nwpay_l2_dce
+        title: Digital Customer Experience
+
+  - _key: ent_te_03_spa_pageload
+    title: TE-03 — SPA login page-load
+    description: ThousandEyes page-load test for the SPA login URL.
+    entity_type_ids:
+      - nwpay_et_thousandeyes
+    identifier:
+      te_test_name: NatWest Payments - SPA login page-load
+    informational:
+      entity_family: thousandeyes_dce
+      te_reference: TE-03
+      te_test_id: "8540217"
+    services:
+      - key: nwpay_l2_dce
+        title: Digital Customer Experience
+
+  - _key: ent_te_04_journey
+    title: TE-04 — end-to-end payment journey
+    description: ThousandEyes web-transactions test for the full payment journey.
+    entity_type_ids:
+      - nwpay_et_thousandeyes
+    identifier:
+      te_test_name: NatWest Payments - end-to-end payment journey
+    informational:
+      entity_family: thousandeyes_dce
+      te_reference: TE-04
+      te_test_id: "8540218"
+    services:
+      - key: nwpay_l2_dce
+        title: Digital Customer Experience
+
+  - _key: ent_te_05_synth_post
+    title: TE-05 — POST /api/process
+    description: ThousandEyes HTTP-server POST test for /api/process.
+    entity_type_ids:
+      - nwpay_et_thousandeyes
+    identifier:
+      te_test_name: NatWest Payments - POST /api/process
+    informational:
+      entity_family: thousandeyes_dce
+      te_reference: TE-05
+      te_test_id: "8540219"
+    services:
+      - key: nwpay_l2_dce
+        title: Digital Customer Experience
+
+  - _key: ent_te_06_dns
+    title: TE-06 — DNS resolution
+    description: ThousandEyes DNS-server test for the demo public hostname.
+    entity_type_ids:
+      - nwpay_et_thousandeyes
+    identifier:
+      te_test_name: NatWest Payments - DNS resolution of demo hostname
+    informational:
+      entity_family: thousandeyes_dce
+      te_reference: TE-06
+      te_test_id: "8540222"
+    services:
+      - key: nwpay_l2_dce
+        title: Digital Customer Experience
+
+  # Postgres in-cluster — one entity per logical database (ledger is the
+  # application DB; postgres is the admin/catalog DB). entity_rules on
+  # nwpay_l4_postgres match informational.entity_family; KPI entity
+  # breakdown joins on identifier pg_database (postgres_exporter datname).
+  - _key: ent_pg_db_ledger
+    title: Postgres — ledger
+    description: Application database for ledger-service (ledger_entries table).
+    entity_type_ids:
+      - nwpay_et_postgres_database
+    identifier:
+      pg_database: ledger
+    informational:
+      entity_family: postgres_database
+      k8s_namespace: natwest
+      k8s_deployment: postgres
+    services:
+      - key: nwpay_l4_postgres
+        title: postgres
+
+  - _key: ent_pg_db_postgres
+    title: Postgres — postgres
+    description: Default Postgres catalog database on the in-cluster instance.
+    entity_type_ids:
+      - nwpay_et_postgres_database
+    identifier:
+      pg_database: postgres
+    informational:
+      entity_family: postgres_database
+      k8s_namespace: natwest
+      k8s_deployment: postgres
+    services:
+      - key: nwpay_l4_postgres
+        title: postgres
+
+  # Kafka in-cluster — one entity per JMX scrape target (single combined
+  # controller+broker node in the demo). entity_rules on nwpay_l4_kafka match
+  # informational.entity_family; KPI entity breakdown joins on identifier
+  # kafka_instance (service.instance.id on kafka_* metrics).
+  - _key: ent_kafka_broker
+    title: Kafka — natwest broker
+    description: >
+      In-cluster Kafka KRaft node (combined controller+broker) scraped via
+      the JMX exporter sidecar on :5556.
+    entity_type_ids:
+      - nwpay_et_kafka_broker
+    identifier:
+      kafka_instance: kafka.natwest.svc.cluster.local:5556
+    informational:
+      entity_family: kafka_broker
+      k8s_namespace: natwest
+      k8s_deployment: kafka
+      kafka_topic: payments.settled
+    services:
+      - key: nwpay_l4_kafka
+        title: kafka
+
+  # infrastructure singletons (non-Postgres, non-Kafka)
+  - { title: redis-natwest,            identifier: { kubernetes.service: redis },      informational: { role: cache } }

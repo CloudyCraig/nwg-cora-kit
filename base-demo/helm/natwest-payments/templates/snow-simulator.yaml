@@ -1,0 +1,419 @@
+{{- if .Values.snowSimulator.enabled }}
+{{- $port := .Values.snowSimulator.port | default 8080 -}}
+{{- $nodePort := .Values.snowSimulator.nodePort | default 30700 -}}
+---
+# Stub "ServiceNow simulator" pod. Exposes a tiny in-memory ticketing
+# API + HTML dashboard so the demo can close the
+#   detector -> ITSI Episode -> ticket
+# loop without needing a real ServiceNow Developer instance. The pod
+# also logs every received ticket as JSON to stdout, which the Splunk
+# OTel Collector captures into index=main sourcetype=snow:ticket --
+# the glass table panel "Active incidents in ServiceNow" reads from
+# that source.
+#
+# IMPLEMENTATION NOTES
+# --------------------
+# * No Docker build: the python:3.12-slim base image runs the script
+#   embedded in this ConfigMap via `python -u /app/server.py`.
+# * No external dependencies: stdlib `http.server` is enough for a
+#   demo-grade webhook + JSON list + tiny HTML page.
+# * Tickets are kept in an in-memory deque (capped at 200). Restarting
+#   the pod resets state -- exactly what we want between demos.
+# * Reads the demo-environment annotations from values.yaml so the
+#   ticket records carry environment + cluster identifiers without
+#   needing the OTel resource processor to add them.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: snow-simulator-app
+  namespace: {{ .Values.namespace }}
+  labels:
+    app.kubernetes.io/name: snow-simulator
+    app.kubernetes.io/part-of: natwest-payments
+data:
+  server.py: |
+    """Tiny ServiceNow ticketing simulator for the NatWest payments demo.
+
+    Endpoints:
+      POST /api/now/v1/incidents    accept an ITSI / o11y webhook ticket
+      POST /api/now/v1/episodes     synonym for the ITSI Episode bridge
+      GET  /api/now/v1/incidents    list current tickets as JSON
+      GET  /                        HTML dashboard
+      GET  /healthz                 readiness probe
+
+    Every accepted ticket is written to stdout as a single-line JSON
+    record so the OTel collector's filelog receiver picks it up and
+    routes it to Splunk Enterprise (annotation-driven via the
+    splunk.com/sourcetype label on the deployment below). The glass
+    table panel reads from the resulting events with sourcetype
+    snow:ticket.
+
+    Security: this is a demo stub, never expose to the public
+    internet. Validates Content-Type, caps payload size at 64KiB,
+    sanitises log output (newline / CR strip).
+    """
+    from __future__ import annotations
+
+    import json
+    import os
+    import sys
+    import threading
+    import time
+    import uuid
+    from collections import deque
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from typing import Any, Deque
+    from urllib.parse import urlparse
+
+    PORT = int(os.environ.get("SNOW_PORT", "8080"))
+    MAX_BODY = 64 * 1024  # 64 KiB per ticket; defense against runaway payloads
+    MAX_TICKETS = 200
+
+    ENVIRONMENT = os.environ.get("DEMO_ENVIRONMENT", "demo")
+    CLUSTER = os.environ.get("DEMO_CLUSTER", "natwest-payments-demo")
+
+    # Optional fan-out: when a ticket's scenario matches one of the
+    # SOAR-eligible scenarios below, POST the ticket payload to the
+    # SOAR simulator's /webhook so an auto-remediation playbook can
+    # run alongside the ServiceNow ticket. SOAR_FORWARD_URL is a
+    # cluster-internal Service URL set by the helm chart; if unset the
+    # forwarder no-ops. SSRF risk is bounded by the closed allow-list
+    # of scenarios + a 5s timeout (codeguard-0-api-web-services).
+    SOAR_FORWARD_URL = os.environ.get("SOAR_FORWARD_URL", "").strip()
+    SOAR_ELIGIBLE_SCENARIOS = frozenset({
+        "swift-counterparty-flap",
+        "cache-cold",
+        "db-slow",
+        "payment-validation-error-spike",
+    })
+
+    TICKETS: Deque[dict[str, Any]] = deque(maxlen=MAX_TICKETS)
+
+
+    def _sanitise(value: str) -> str:
+        return value.replace("\r", " ").replace("\n", " ")[:512]
+
+
+    def _record_ticket(payload: dict[str, Any]) -> dict[str, Any]:
+        # Splunk's built-in webhook alert action POSTs the saved-search
+        # context with the matched event under a "result" key. ITSI's
+        # itsi_event_generator and a hand-rolled curl-style POST send
+        # the event fields at the top level. Handle both shapes.
+        if isinstance(payload.get("result"), dict):
+            payload = {**payload, **payload["result"]}
+        # Closed enum of severities so the dashboard heat colours render
+        # consistently regardless of upstream phrasing.
+        sev = str(payload.get("severity", "")).strip().lower()
+        # ITSI uses numeric severity (1-6); translate to a label.
+        sev_label_map = {"6": "critical", "5": "high", "4": "warning", "3": "minor", "2": "info", "1": "info"}
+        if sev in sev_label_map:
+            sev = sev_label_map[sev]
+        if sev not in {"critical", "high", "major", "warning", "minor", "info"}:
+            sev = "warning"
+        ticket = {
+            "ticket_id": "INC{:07d}".format(int(time.time()) % 10_000_000),
+            "uuid": str(uuid.uuid4()),
+            "@timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "event_type": "snow_ticket",
+            "environment": ENVIRONMENT,
+            "cluster": CLUSTER,
+            "severity": sev,
+            "status": "open",
+            "title": _sanitise(str(payload.get("title") or payload.get("name") or "untitled")),
+            "service": _sanitise(str(payload.get("service") or "")),
+            "source": _sanitise(str(payload.get("source") or "ITSI")),
+            "description": _sanitise(str(payload.get("description") or "")),
+            "correlation_id": _sanitise(str(payload.get("correlation_id") or payload.get("event_id") or "")),
+        }
+        # Match a known SOAR-eligible scenario from the title text
+        # (same fuzzy match the SOAR sim uses) and stamp it on the
+        # ticket. This is what the SOAR forwarder + glass-table panels
+        # filter on.
+        title_l = ticket["title"].lower()
+        for known in SOAR_ELIGIBLE_SCENARIOS:
+            if known.replace("-", " ") in title_l or known in title_l:
+                ticket["scenario"] = known
+                break
+        TICKETS.appendleft(ticket)
+        # JSON to stdout = OTel filelog receiver picks it up -> Splunk HEC.
+        sys.stdout.write(json.dumps(ticket, separators=(",", ":")) + "\n")
+        sys.stdout.flush()
+        # Optional fan-out to the SOAR simulator. Done in a daemon
+        # thread so a slow / down SOAR pod never blocks ticket
+        # creation. Only fires for known-eligible scenarios.
+        if SOAR_FORWARD_URL and ticket.get("scenario") in SOAR_ELIGIBLE_SCENARIOS:
+            threading.Thread(
+                target=_forward_to_soar, args=(ticket,), daemon=True
+            ).start()
+        return ticket
+
+
+    def _forward_to_soar(ticket: dict[str, Any]) -> None:
+        try:
+            import urllib.request
+            body = json.dumps({
+                "scenario":  ticket.get("scenario"),
+                "title":     ticket.get("title"),
+                "service":   ticket.get("service"),
+                "severity":  ticket.get("severity"),
+                "source":    "ServiceNow simulator forward",
+                "snow_ticket_id": ticket.get("ticket_id"),
+            }).encode("utf-8")
+            req = urllib.request.Request(
+                SOAR_FORWARD_URL,
+                data=body,
+                method="POST",
+                headers={"Content-Type": "application/json"},
+            )
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                resp.read()
+        except Exception as exc:  # noqa: BLE001 - non-fatal
+            sys.stdout.write(json.dumps({
+                "event_type": "snow_simulator_warn",
+                "message":    "soar_forward_failed",
+                "error":      str(exc)[:200],
+            }) + "\n")
+            sys.stdout.flush()
+
+
+    class Handler(BaseHTTPRequestHandler):
+        # Quiet the per-request access log; ticket creation goes through
+        # _record_ticket which already prints a structured record.
+        def log_message(self, fmt: str, *args: Any) -> None:
+            return
+
+        def _send_json(self, code: int, body: dict[str, Any] | list[Any]) -> None:
+            payload = json.dumps(body).encode("utf-8")
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def _read_body(self) -> dict[str, Any]:
+            length = int(self.headers.get("Content-Length", "0") or "0")
+            if length <= 0 or length > MAX_BODY:
+                return {}
+            raw = self.rfile.read(length)
+            try:
+                obj = json.loads(raw.decode("utf-8"))
+            except json.JSONDecodeError:
+                return {}
+            return obj if isinstance(obj, dict) else {"_raw": str(obj)[:500]}
+
+        def do_GET(self) -> None:
+            path = urlparse(self.path).path
+            if path == "/healthz":
+                self._send_json(200, {"status": "ok", "tickets": len(TICKETS)})
+                return
+            if path in {"/api/now/v1/incidents", "/api/now/v1/episodes"}:
+                self._send_json(200, {"count": len(TICKETS), "result": list(TICKETS)})
+                return
+            if path == "/" or path == "/index.html":
+                self._send_html()
+                return
+            self._send_json(404, {"error": "not found"})
+
+        def do_POST(self) -> None:
+            path = urlparse(self.path).path
+            if path not in {"/api/now/v1/incidents", "/api/now/v1/episodes"}:
+                self._send_json(404, {"error": "not found"})
+                return
+            ctype = (self.headers.get("Content-Type") or "").lower()
+            if "application/json" not in ctype:
+                self._send_json(415, {"error": "Content-Type must be application/json"})
+                return
+            payload = self._read_body()
+            ticket = _record_ticket(payload)
+            self._send_json(201, {"result": ticket})
+
+        def _send_html(self) -> None:
+            rows = []
+            sev_colour = {
+                "critical": "#B50101",
+                "high": "#B50101",
+                "major": "#F58F39",
+                "warning": "#F8BE34",
+                "minor": "#F8BE34",
+                "info": "#1E93C6",
+            }
+            for t in list(TICKETS):
+                colour = sev_colour.get(t["severity"], "#94a3b8")
+                rows.append(
+                    "<tr>"
+                    "<td>" + t["ticket_id"] + "</td>"
+                    "<td><span class=\"chip\" style=\"background:" + colour + "\">"
+                    + t["severity"].upper() + "</span></td>"
+                    "<td>" + t["title"] + "</td>"
+                    "<td>" + t["service"] + "</td>"
+                    "<td>" + t["source"] + "</td>"
+                    "<td>" + t["@timestamp"] + "</td>"
+                    "</tr>"
+                )
+            html = (
+                "<!doctype html><html><head><meta charset=\"utf-8\">"
+                "<title>NatWest demo - ServiceNow simulator</title>"
+                "<style>"
+                "body{font-family:-apple-system,Segoe UI,sans-serif;margin:0;background:#0b1220;color:#f3f4f6;}"
+                "header{background:linear-gradient(90deg,#5A287D,#3B1A52);padding:18px 28px;}"
+                "header h1{margin:0;font-size:22px;}"
+                "header p{margin:4px 0 0;color:#dcd0e8;font-size:13px;}"
+                "main{padding:24px 28px;}"
+                ".count{background:#172033;border-radius:8px;padding:16px 20px;display:inline-block;margin-bottom:18px;font-size:18px;}"
+                "table{width:100%;border-collapse:collapse;background:#111827;border-radius:8px;overflow:hidden;}"
+                "th,td{padding:10px 14px;text-align:left;border-bottom:1px solid #1f2937;font-size:13px;}"
+                "th{background:#1f2937;font-weight:600;color:#9ca3af;text-transform:uppercase;letter-spacing:.4px;font-size:11px;}"
+                ".chip{display:inline-block;padding:2px 10px;border-radius:12px;color:#fff;font-size:11px;font-weight:600;}"
+                ".empty{padding:24px;text-align:center;color:#94a3b8;}"
+                "</style></head><body>"
+                "<header><h1>ServiceNow (simulated) - NatWest payments demo</h1>"
+                "<p>Tickets opened from ITSI Episodes / Splunk Observability detectors. "
+                "Stateful per pod (in-memory, capped at " + str(MAX_TICKETS) + ").</p></header>"
+                "<main><div class=\"count\">Active tickets: <strong>" + str(len(TICKETS)) + "</strong></div>"
+                "<table><thead><tr><th>Ticket</th><th>Severity</th><th>Title</th>"
+                "<th>Service</th><th>Source</th><th>Opened</th></tr></thead>"
+                "<tbody>" + ("".join(rows) if rows else "<tr><td colspan=\"6\" class=\"empty\">No tickets yet. Trigger a detector or run scripts/incident.sh swift-counterparty-flap.</td></tr>") + "</tbody></table>"
+                "</main></body></html>"
+            )
+            payload = html.encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(payload)))
+            self.send_header("Cache-Control", "no-store")
+            # Defensive headers (codeguard-0-client-side-web-security):
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("X-Frame-Options", "SAMEORIGIN")
+            self.send_header("Referrer-Policy", "no-referrer")
+            self.end_headers()
+            self.wfile.write(payload)
+
+
+    def main() -> None:
+        # Bind to localhost-of-pod (0.0.0.0). NetworkPolicy below restricts
+        # who can reach this service; we never expose to the public internet.
+        server = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
+        sys.stdout.write(json.dumps({
+            "event_type": "snow_simulator_start",
+            "port": PORT,
+            "environment": ENVIRONMENT,
+            "cluster": CLUSTER,
+        }) + "\n")
+        sys.stdout.flush()
+        try:
+            server.serve_forever()
+        finally:
+            server.server_close()
+
+
+    if __name__ == "__main__":
+        main()
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: snow-simulator
+  namespace: {{ .Values.namespace }}
+  labels:
+    app.kubernetes.io/name: snow-simulator
+    app.kubernetes.io/part-of: natwest-payments
+  annotations:
+    # OTel collector picks up stdout via filelog receiver. Routing
+    # snow-simulator stdout to its own sourcetype keeps the panel
+    # query (sourcetype="snow:ticket") cheap and isolates the
+    # ticket records from the rest of index=main.
+    splunk.com/sourcetype: "snow:ticket"
+    splunk.com/index: "main"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: snow-simulator
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: snow-simulator
+        app.kubernetes.io/part-of: natwest-payments
+      annotations:
+        splunk.com/sourcetype: "snow:ticket"
+        splunk.com/index: "main"
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: server
+          image: {{ .Values.snowSimulator.image | quote }}
+          imagePullPolicy: IfNotPresent
+          command: ["python", "-u", "/app/server.py"]
+          env:
+            - name: SNOW_PORT
+              value: "{{ $port }}"
+            # Required because containerSecurityContext sets
+            # readOnlyRootFilesystem=true; without this CPython would
+            # try to drop bytecode caches under /usr/lib/python3.12/ and
+            # crash on first import.
+            - name: PYTHONDONTWRITEBYTECODE
+              value: "1"
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: DEMO_ENVIRONMENT
+              value: {{ .Values.otel.environment | quote }}
+            - name: DEMO_CLUSTER
+              value: {{ .Values.otel.deployment | quote }}
+            {{- if .Values.soarSimulator.enabled }}
+            # Forward SOAR-eligible tickets to the in-cluster SOAR
+            # simulator so the demo's "detection -> ticket -> action"
+            # loop closes automatically. Empty (or unset) disables
+            # forwarding.
+            - name: SOAR_FORWARD_URL
+              value: "http://soar-simulator.{{ .Values.namespace }}.svc.cluster.local:{{ .Values.soarSimulator.port | default 8080 }}/webhook"
+            {{- end }}
+          ports:
+            - name: http
+              containerPort: {{ $port }}
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 2
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          resources:
+            requests: { cpu: "10m",  memory: "32Mi" }
+            limits:   { cpu: "100m", memory: "96Mi" }
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          volumeMounts:
+            - name: app
+              mountPath: /app
+      volumes:
+        - name: app
+          configMap:
+            name: snow-simulator-app
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: snow-simulator
+  namespace: {{ .Values.namespace }}
+  labels:
+    app.kubernetes.io/name: snow-simulator
+    app.kubernetes.io/part-of: natwest-payments
+spec:
+  type: {{ .Values.snowSimulator.serviceType | default "ClusterIP" }}
+  selector:
+    app.kubernetes.io/name: snow-simulator
+  ports:
+    - name: http
+      port: {{ $port }}
+      targetPort: http
+      {{- if eq (.Values.snowSimulator.serviceType | default "ClusterIP") "NodePort" }}
+      nodePort: {{ $nodePort }}
+      {{- end }}
+{{- end }}

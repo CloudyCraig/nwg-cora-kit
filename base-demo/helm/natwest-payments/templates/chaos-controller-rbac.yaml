@@ -1,0 +1,67 @@
+{{- if (.Values.chaosController).enabled }}
+# chaos-controller RBAC.
+#
+# The Role grants the absolute minimum verbs required to drive the 19
+# scenarios in chaos-controller/app/scenarios.py:
+#
+#   * deployments get/list  - read current env + replica counts for status().
+#   * deployments patch     - set env (rolling restart).
+#   * deployments/scale     - scale to 0 (kill-service / infra outage).
+#   * pods get/list/delete  - pod-restart-gateway.
+#
+# Crucially absent: no `secrets`, `configmaps/write`, `pods/exec`,
+# `nodes`, or cluster-scoped verbs of any kind. Even if the presenter
+# token leaks, the blast radius is "patch our own demo deployments".
+#
+# Scope: a namespace-scoped Role + RoleBinding pinned to {{ .Values.namespace }}.
+# No ClusterRole anywhere - this controller cannot touch any other
+# namespace in the cluster.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: chaos-controller
+  namespace: {{ .Values.namespace }}
+  labels:
+    app.kubernetes.io/name: chaos-controller
+    app.kubernetes.io/component: chaos-controller
+    app.kubernetes.io/part-of: natwest-payments
+    app.kubernetes.io/managed-by: Helm
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: chaos-controller
+  namespace: {{ .Values.namespace }}
+  labels:
+    app.kubernetes.io/name: chaos-controller
+    app.kubernetes.io/component: chaos-controller
+    app.kubernetes.io/part-of: natwest-payments
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "patch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments/scale"]
+    verbs: ["get", "patch", "update"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: chaos-controller
+  namespace: {{ .Values.namespace }}
+  labels:
+    app.kubernetes.io/name: chaos-controller
+    app.kubernetes.io/component: chaos-controller
+    app.kubernetes.io/part-of: natwest-payments
+subjects:
+  - kind: ServiceAccount
+    name: chaos-controller
+    namespace: {{ .Values.namespace }}
+roleRef:
+  kind: Role
+  name: chaos-controller
+  apiGroup: rbac.authorization.k8s.io
+{{- end }}
